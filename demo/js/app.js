@@ -150,10 +150,32 @@ export const app = (window.app = createApp({
       }
       const gcodeStream = response.body.pipeThrough(new TextDecoderStream());
       const prevDevMode = preview.devMode;
-      // preview.clear();
       preview.devMode = prevDevMode;
-      await preview.processGCode(gcodeStream, { render: false }); // rendering will be done reactively
+
+      try {
+        await preview.processGCode(gcodeStream, { render: false });
+
+        // Check if bounding box is valid
+        if (!preview.parser.metadata.boundingBox ||
+          !preview.parser.metadata.boundingBox.min ||
+          !preview.parser.metadata.boundingBox.max) {
+
+          console.warn('No valid bounding box found, using default bounds');
+
+          // Set a default bounding box based on your printer dimensions
+          preview.parser.metadata.boundingBox = {
+            min: { x: 0, y: 0, z: 0 },
+            max: { x: 200, y: 200, z: 50 }
+          };
+        }
+
+      } catch (error) {
+        console.error('Error processing G-code:', error);
+        // Handle error appropriately
+      }
     };
+
+
 
     const render = async () => {
       if (loadProgressive.value && preview.job.layers !== null) {
