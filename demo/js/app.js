@@ -29,7 +29,7 @@ export const app = (window.app = createApp({
     // Fetch presets from API and merge with local presets
     const fetchPresets = async () => {
       try {
-        const response = await fetch('http://localhost:2727/preview/gcodes?skip=0&limit=100');
+        const response = await fetch('http://localhost:2727/preview/gcodes?skip=0&limit=300');
         if (!response.ok) {
           console.warn('Failed to fetch presets from API');
           return;
@@ -141,40 +141,43 @@ export const app = (window.app = createApp({
       preview.endLayer = countLayers;
       applyDevMode(enableDevMode.value);
     };
-
     const loadGCodeFromServer = async (filename) => {
       const response = await fetch(filename);
       if (response.status !== 200) {
         console.error('ERROR. Status Code: ' + response.status);
         return;
       }
-      const gcodeStream = response.body.pipeThrough(new TextDecoderStream());
+
+      // Original text stream
+      const gcodeStream = response.body
+        .pipeThrough(new TextDecoderStream())
+        .pipeThrough(new TransformStream({
+          transform(chunk, controller) {
+            // Remove leading N### + optional spaces from each line
+            const cleaned = chunk.replace(/^N\d+\s+/gm, "");
+            controller.enqueue(cleaned);
+          }
+        }));
+
       const prevDevMode = preview.devMode;
       preview.devMode = prevDevMode;
 
       try {
         await preview.processGCode(gcodeStream, { render: false });
 
-        // Check if bounding box is valid
         if (!preview.parser.metadata.boundingBox ||
           !preview.parser.metadata.boundingBox.min ||
           !preview.parser.metadata.boundingBox.max) {
-
           console.warn('No valid bounding box found, using default bounds');
-
-          // Set a default bounding box based on your printer dimensions
           preview.parser.metadata.boundingBox = {
             min: { x: 0, y: 0, z: 0 },
             max: { x: 200, y: 200, z: 50 }
           };
         }
-
       } catch (error) {
         console.error('Error processing G-code:', error);
-        // Handle error appropriately
       }
     };
-
 
 
     const render = async () => {
