@@ -144,7 +144,7 @@ export const app = (window.app = createApp({
               y: 180,
               z: 0
             },
-            initialCameraPosition: [-20, 20, 1.8]
+            // initialCameraPosition: [-20, 20, 1.8]
           };
         });
 
@@ -271,6 +271,14 @@ export const app = (window.app = createApp({
           return safeColor;
         });
 
+        // Ensure all colors are valid hex strings (fix the Vue validation errors)
+        const validColors = safeColors.map(color => {
+          if (!color || color === '' || !color.match(/^#[0-9A-Fa-f]{6}$/)) {
+            return '#95dfa1'; // Default fallback color
+          }
+          return color;
+        });
+
         const currentSettings = {
           startLayer: 1,
           enableStartLayer: false,
@@ -284,7 +292,7 @@ export const app = (window.app = createApp({
           lineWidth,
           renderTubes,
           extrusionWidth,
-          colors: safeColors,
+          colors: validColors,
           topLayerColor: safeGetHexString(topLayerColor, '#FF0000'),
           highlightTopLayer: !!topLayerColor,
           lastSegmentColor: safeGetHexString(lastSegmentColor, '#FFFF00'),
@@ -300,21 +308,14 @@ export const app = (window.app = createApp({
         preview.endLayer = countLayers;
         applyDevMode(enableDevMode.value);
 
-        // Force render after UI update for zero-layer files
-        if (countLayers === 0) {
-          console.log('[UI] Zero layers detected, forcing render attempt');
-          setTimeout(() => {
-            try {
-              if (preview) {
-                preview.render();
-              }
-            } catch (error) {
-              console.error('[UI] Error in forced render:', error);
-            }
-          }, 100);
-        }
-
         console.log('[UI] UI update completed successfully');
+
+        // Force a render after UI update to ensure visibility
+        setTimeout(() => {
+          console.log('[UI] Triggering post-UI render');
+          render();
+        }, 100);
+
       } catch (error) {
         console.error('[UI] Error updating UI:', error);
       }
@@ -372,8 +373,8 @@ export const app = (window.app = createApp({
         const prevDevMode = preview.devMode;
         preview.devMode = prevDevMode;
 
-        // Process with render: true to ensure proper initialization
-        await preview.processGCode(gcodeStream, { render: true });
+        // Process G-code and render immediately
+        await preview.processGCode(gcodeStream, { render: false });
         console.log('[LOAD] G-code processing completed');
 
         // Check token after processing
@@ -386,6 +387,11 @@ export const app = (window.app = createApp({
         if (currentToken === switchToken) {
           console.log('[LOAD] Updating UI after successful G-code load');
           await updateUI();
+
+          // Ensure render happens after all setup is complete
+          console.log('[LOAD] Performing final render after G-code load');
+          await render();
+
           console.log('[LOAD] G-code load and UI update completed successfully');
         } else {
           console.log(`[LOAD] Skipping UI update - token mismatch (current: ${currentToken}, latest: ${switchToken})`);
@@ -405,14 +411,26 @@ export const app = (window.app = createApp({
           return;
         }
 
-        if (loadProgressive.value && preview.job && preview.job.layers !== null) {
+        console.log(`[RENDER] Preview state - layers: ${preview.countLayers}, job exists: ${!!preview.job}`);
+
+        if (loadProgressive.value && preview.job && preview.job.layers !== null && preview.countLayers > 0) {
           console.log('[RENDER] Using animated rendering');
           await preview.renderAnimated();
         } else {
           console.log('[RENDER] Using standard rendering');
           preview.render();
         }
-        console.log('[RENDER] Render completed');
+
+        // Additional render verification
+        console.log('[RENDER] Render completed, checking canvas state');
+        const canvas = document.querySelector('canvas.preview');
+        if (canvas) {
+          console.log(`[RENDER] Canvas dimensions: ${canvas.width}x${canvas.height}`);
+          console.log(`[RENDER] Canvas style: ${canvas.style.display}`);
+        } else {
+          console.error('[RENDER] Canvas not found after render!');
+        }
+
       } catch (error) {
         console.error('[RENDER] Error during render:', error);
       }
@@ -429,7 +447,7 @@ export const app = (window.app = createApp({
           console.error('[PRESET] Canvas element not found');
           return;
         }
-        console.log('[PRESET] Canvas element found');
+        console.log(`[PRESET] Canvas element found: ${canvas.width}x${canvas.height}`);
 
         const preset = presets.value[presetName];
         if (!preset) {
@@ -609,7 +627,7 @@ export const app = (window.app = createApp({
             // run render after settings have been applied
             setTimeout(() => {
               render();
-            }, 0);
+            }, 50); // Slightly longer delay to ensure all settings are applied
           } catch (error) {
             console.error('[WATCH-EFFECT] Error updating render settings:', error);
           }
