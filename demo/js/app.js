@@ -120,7 +120,8 @@ export const app = (window.app = createApp({
             model: { name: item.filename },
             ...defaultsForDynamic,
             ...(item.settings || {}),
-            buildVolume: { x: 300, y: 180, z: 0 }
+            buildVolume: { x: 100, y: 100, z: 10 },
+            // initialCameraPosition: [-20, 20, 1.8]
           };
         });
 
