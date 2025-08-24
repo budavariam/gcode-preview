@@ -230,9 +230,18 @@
          
           
           <div>
-            <a class="has-text-grey-light" href="https://github.com/remcoder/gcode-preview">GitHub</a>
+            <a class="has-text-grey-light" href="https://github.com/budavariam/gcode-preview">GitHub</a>
             - <a class="has-text-grey-light" href="/docs">API docs</a>
-            - <button @click="loadMorePresets">Load more</button>
+            - <button 
+              @click="loadMorePresets" 
+              :disabled="!hasMorePresets || isLoading"
+              :class="{ 'loading': isLoading }"
+            >
+              <span v-if="isLoading">Loading...</span>
+              <span v-else-if="hasMorePresets">Load More ({{ Object.keys(presets).length - Object.keys(localPresets || {}).length }} loaded)</span>
+              <span v-else>No More Presets</span>
+            </button>
+
           </div>
           <div>MIT license </div>
         </footer>

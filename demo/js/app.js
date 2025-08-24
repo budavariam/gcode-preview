@@ -1,8 +1,9 @@
-import { createApp, ref, watch, onMounted, watchEffect } from 'vue';
+import { createApp, ref, watch, onMounted, watchEffect, readonly } from 'vue';
 import { presets as localPresets } from './presets.js';
 import * as GCodePreview from 'gcode-preview';
 import { defaultSettings } from './default-settings.js';
 import { parseIntOrDefault } from './utils.js';
+
 
 const defaultPreset = 'benchy';
 const preferDarkMode = window.matchMedia('(prefers-color-scheme: dark)');
@@ -13,6 +14,7 @@ let preview = null;
 let switchToken = 0;
 let presetSwitchTimeout = null;
 let renderInProgress = false;
+
 
 // NEW: Function to parse build volume from G-code comments
 const parseBuildVolumeFromGCode = (gcodeText) => {
@@ -60,6 +62,7 @@ const parseBuildVolumeFromGCode = (gcodeText) => {
   return null;
 };
 
+
 // FIXED: Bulletproof color handling
 const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
   if (!colorObj) return defaultColor;
@@ -85,6 +88,7 @@ const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
   return defaultColor;
 };
 
+
 // Simple render without coordination complexity
 const simpleRender = async () => {
   if (!preview || renderInProgress) return;
@@ -100,6 +104,7 @@ const simpleRender = async () => {
     renderInProgress = false;
   }
 };
+
 
 // Basic disposal - no complex cleanup
 const disposePreview = async () => {
@@ -121,11 +126,13 @@ const disposePreview = async () => {
   await new Promise(resolve => setTimeout(resolve, 50));
 };
 
+
 // Fresh URL helper
 const getFreshUrl = (url) => {
   const sep = url.includes('?') ? '&' : '?';
   return `${url}${sep}_t=${Date.now()}&_r=${Math.random().toString(36).slice(2)}`;
 };
+
 
 export const app = (window.app = createApp({
   setup() {
@@ -143,13 +150,40 @@ export const app = (window.app = createApp({
     // NEW: Track detected build volume info
     const detectedBuildVolume = ref(null);
 
-    // Fetch presets from API
-    const fetchPresets = async () => {
+    // NEW: Add pagination state
+    const currentSkip = ref(0);
+    const itemsPerLoad = ref(100);
+    const isLoading = ref(false);
+    const hasMorePresets = ref(true);
+
+    // UPDATED: Enhanced fetchPresets with pagination support
+    const fetchPresets = async (loadMore = false) => {
+      if (isLoading.value) return; // Prevent multiple simultaneous requests
+
+      isLoading.value = true;
+
       try {
-        const response = await fetch('http://localhost:2727/preview/gcodes?skip=0&limit=300', { cache: 'no-store' });
-        if (!response.ok) return;
+        const skip = loadMore ? currentSkip.value : 0;
+        const limit = itemsPerLoad.value;
+
+        console.log(`[API] Fetching presets: skip=${skip}, limit=${limit}`);
+
+        const response = await fetch(
+          `http://localhost:2727/preview/gcodes?skip=${skip}&limit=${limit}`,
+          { cache: 'no-store' }
+        );
+
+        if (!response.ok) {
+          console.error(`[API] Request failed: ${response.status} ${response.statusText}`);
+          return;
+        }
 
         const apiPresets = await response.json();
+        console.log(`[API] Received ${apiPresets.length} presets`);
+
+        // Check if we have more items to load
+        hasMorePresets.value = apiPresets.length === limit;
+
         const defaultsForDynamic = {
           extrusionWidth: 0.45,
           lineHeight: 0.2,
@@ -169,24 +203,65 @@ export const app = (window.app = createApp({
             ...defaultsForDynamic,
             ...(item.settings || {}),
             buildVolume: { x: 100, y: 100, z: 10 },
-            // initialCameraPosition: [-20, 20, 1.8]
           };
         });
 
-        const merged = { ...presets.value };
-        let addedCount = 0;
-        for (const key in newPresets) {
-          if (!(key in localPresets) && !(key in merged)) {
-            merged[key] = newPresets[key];
-            addedCount++;
+        if (loadMore) {
+          // Append new presets to existing ones
+          const merged = { ...presets.value };
+          let addedCount = 0;
+
+          for (const key in newPresets) {
+            if (!(key in merged)) {
+              merged[key] = newPresets[key];
+              addedCount++;
+            }
           }
+
+          presets.value = merged;
+          currentSkip.value += limit;
+          console.log(`[API] Added ${addedCount} new presets (total skip: ${currentSkip.value})`);
+        } else {
+          // Initial load - merge with local presets
+          const merged = { ...presets.value };
+          let addedCount = 0;
+
+          for (const key in newPresets) {
+            if (!(key in localPresets) && !(key in merged)) {
+              merged[key] = newPresets[key];
+              addedCount++;
+            }
+          }
+
+          presets.value = merged;
+          currentSkip.value = limit;
+          console.log(`[API] Initial load: ${addedCount} new presets`);
         }
 
-        presets.value = merged;
-        console.log(`[API] Added ${addedCount} new presets`);
       } catch (error) {
-        console.error('[API] Error:', error);
+        console.error('[API] Error fetching presets:', error);
+        hasMorePresets.value = false; // Stop trying if there's an error
+      } finally {
+        isLoading.value = false;
       }
+    };
+
+    // NEW: Load more presets function
+    const loadMorePresets = async () => {
+      if (!hasMorePresets.value || isLoading.value) {
+        console.log('[API] No more presets to load or already loading');
+        return;
+      }
+
+      await fetchPresets(true);
+    };
+
+    // NEW: Reset presets function (useful for debugging)
+    const resetPresets = async () => {
+      currentSkip.value = 0;
+      hasMorePresets.value = true;
+      presets.value = { ...localPresets };
+      await fetchPresets(false);
     };
 
     // Watch preset changes
@@ -366,7 +441,6 @@ export const app = (window.app = createApp({
       }
     };
 
-
     // FIXED: Simple preset selection - no canvas recreation
     const selectPreset = async (presetName) => {
       const myToken = ++switchToken;
@@ -439,7 +513,7 @@ export const app = (window.app = createApp({
 
     onMounted(async () => {
       try {
-        await fetchPresets();
+        await fetchPresets(); // Initial load
         await selectPreset(defaultPreset);
 
         // Setup watchers with better error handling
@@ -518,11 +592,19 @@ export const app = (window.app = createApp({
     });
 
     return {
+      // Original returns
       presets, activeTab, selectedPreset, thumbnail, layerCount, fileSize,
       model, dragging, settings, loadProgressive, enableDevMode, drawBoundingBox,
       detectedBuildVolume, // NEW: Expose detected build volume
       selectTab, addColor, removeColor, update, resetUI: updateUI,
-      loadGCodeFromServer, selectPreset
+      loadGCodeFromServer, selectPreset,
+
+      // NEW: Add pagination-related returns
+      loadMorePresets,
+      resetPresets,
+      isLoading,
+      hasMorePresets,
+      currentSkip: readonly(currentSkip), // Make read-only for template
     };
   }
 }).mount('#app'));
