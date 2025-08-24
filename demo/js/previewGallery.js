@@ -1,5 +1,5 @@
-// PreviewGallery.js - VIRTUALIZED INFINITE SCROLL
-import { ref, watch, computed, nextTick, getCurrentInstance } from 'vue';
+// PreviewGallery.js - FIXED VERSION
+import { ref, watch, computed, nextTick, getCurrentInstance, onMounted } from 'vue';
 import { loadGCodeFromServer, createPreviewInstance, renderGCodePreview } from './gcode-utils.js';
 
 export function createPreviewGallery() {
@@ -19,6 +19,7 @@ export function createPreviewGallery() {
                 class="gallery-virtual-item" 
                 :style="getItemStyle(index)"
                 @click="selectItem(item)"
+                :class="{ 'selected': selectedItemId === item.key }"
               >
                 <div class="gallery-preview">
                   <canvas 
@@ -52,12 +53,18 @@ export function createPreviewGallery() {
             const currentlyLoading = ref(-1);
             const previewInstances = ref({});
 
+            // Selected item tracking for URL sync
+            const selectedItemId = ref(null);
+
+            // **NEW**: Flag to prevent auto-close during URL initialization
+            const isInitializing = ref(false);
+
             // Virtual scrolling state
             const scrollContainer = ref(null);
             const scrollTop = ref(0);
-            const itemHeight = 160; // Height per item including margin
-            const visibleCount = 4; // Show 4 items at once
-            const buffer = 2; // Extra items to render above/below
+            const itemHeight = 160;
+            const visibleCount = 4;
+            const buffer = 2;
             const renderedStart = ref(0);
             const renderedEnd = ref(visibleCount + buffer);
 
@@ -72,11 +79,73 @@ export function createPreviewGallery() {
             const totalItems = computed(() => allItems.value.length);
             const totalHeight = computed(() => totalItems.value * itemHeight);
 
-            // Only render items in current viewport + buffer
             const renderedItems = computed(() => {
                 const start = renderedStart.value;
                 const end = Math.min(renderedEnd.value, allItems.value.length);
                 return allItems.value.slice(start, end);
+            });
+
+            // URL Query Parameter Management
+            function getQueryParam(key) {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get(key);
+            }
+
+            function setQueryParam(key, value) {
+                const url = new URL(window.location);
+                if (value) {
+                    url.searchParams.set(key, value);
+                } else {
+                    url.searchParams.delete(key);
+                }
+                window.history.replaceState({}, '', url);
+            }
+
+            // **FIXED**: Load selected item from URL without closing modal
+            function loadSelectedItemFromUrl() {
+                const selectedParam = getQueryParam('selectedItem');
+                if (selectedParam && allItems.value.length > 0) {
+                    const foundItem = allItems.value.find(item => item.key === selectedParam);
+                    if (foundItem) {
+                        console.log(`[GALLERY] Loading selected item from URL: ${selectedParam}`);
+                        selectedItemId.value = selectedParam;
+
+                        // **FIXED**: Set initialization flag and emit without closing
+                        isInitializing.value = true;
+                        emit('select', selectedParam);
+                        // Reset flag after a short delay
+                        setTimeout(() => {
+                            isInitializing.value = false;
+                        }, 100);
+
+                        return true;
+                    } else {
+                        console.warn(`[GALLERY] Selected item ${selectedParam} not found in presets`);
+                        setQueryParam('selectedItem', null);
+                    }
+                }
+                return false;
+            }
+
+            // Watch for changes in dynamicPresets and load URL param
+            watch(() => props.dynamicPresets, (newPresets) => {
+                if (newPresets && Object.keys(newPresets).length > 0) {
+                    console.log('[GALLERY] Dynamic presets updated, checking URL params');
+                    loadSelectedItemFromUrl();
+                }
+            }, { immediate: true });
+
+            // Watch for gallery visibility and handle URL params
+            watch(() => props.visible, (visible) => {
+                if (visible) {
+                    console.log('[GALLERY] Modal opened');
+                    if (allItems.value.length > 0) {
+                        loadSelectedItemFromUrl();
+                    }
+                } else {
+                    console.log('[GALLERY] Modal closed');
+                    disposeAllPreviews();
+                }
             });
 
             function getFullName(item) {
@@ -112,9 +181,21 @@ export function createPreviewGallery() {
                 };
             }
 
+            // **FIXED**: Select item with proper modal behavior
             function selectItem(item) {
-                console.log('[GALLERY] Selecting item:', item.key);
+                console.log(`[GALLERY] User clicked item: ${item.key}`);
+
+                // Update selected item state
+                selectedItemId.value = item.key;
+
+                // Update URL query parameter
+                setQueryParam('selectedItem', item.key);
+
+                // Emit select event
                 emit('select', item.key);
+
+                // **FIXED**: Always close modal on user click (not during initialization)
+                emit('close');
             }
 
             // Virtual scroll handler
@@ -122,31 +203,25 @@ export function createPreviewGallery() {
                 const target = event.target;
                 scrollTop.value = target.scrollTop;
 
-                // Calculate which items should be visible
                 const firstVisible = Math.floor(scrollTop.value / itemHeight);
                 const newStart = Math.max(0, firstVisible - buffer);
                 const newEnd = Math.min(allItems.value.length, firstVisible + visibleCount + buffer * 2);
 
-                // Only update if range actually changed
                 if (newStart !== renderedStart.value || newEnd !== renderedEnd.value) {
                     console.log(`[GALLERY] Virtual scroll update: ${newStart} to ${newEnd}`);
 
-                    // Dispose old previews that are going out of view
                     disposeOutOfRangePreviews(newStart, newEnd);
 
                     renderedStart.value = newStart;
                     renderedEnd.value = newEnd;
                 }
 
-                // Infinite scroll - load more when near bottom
-                const threshold = 200; // pixels from bottom
+                const threshold = 200;
                 if (target.scrollHeight - (target.scrollTop + target.clientHeight) < threshold) {
                     console.log('[GALLERY] Near bottom - could trigger load more here');
-                    // Your load more logic would go here
                 }
             }
 
-            // Dispose previews that are no longer in rendered range
             function disposeOutOfRangePreviews(newStart, newEnd) {
                 Object.keys(previewInstances.value).forEach(key => {
                     const absoluteIndex = parseInt(key);
@@ -163,7 +238,6 @@ export function createPreviewGallery() {
                 });
             }
 
-            // Dispose all current previews
             function disposeAllPreviews() {
                 Object.values(previewInstances.value).forEach(preview => {
                     try {
@@ -177,7 +251,6 @@ export function createPreviewGallery() {
                 currentlyLoading.value = -1;
             }
 
-            // Render single 3D preview
             async function render3DPreview(item, canvasElement, absoluteIndex) {
                 try {
                     console.log(`[GALLERY] [${absoluteIndex}] Rendering preview for: ${getFullName(item)}`);
@@ -189,14 +262,10 @@ export function createPreviewGallery() {
 
                     const fileUrl = typeof item.getFileUrl === 'function' ? item.getFileUrl() : item.file;
 
-                    // Use shared preview creation function
-                    const preview = createPreviewInstance(canvasElement, item, true); // true = gallery mode
+                    const preview = createPreviewInstance(canvasElement, item, true);
                     previewInstances.value[absoluteIndex] = preview;
 
-                    // Use shared G-code loading function
                     const gcodeStream = await loadGCodeFromServer(fileUrl);
-
-                    // Use shared rendering function
                     await renderGCodePreview(preview, gcodeStream, 100);
 
                     loadedCanvases.value[absoluteIndex] = true;
@@ -205,7 +274,6 @@ export function createPreviewGallery() {
                 } catch (error) {
                     console.error(`[GALLERY] [${absoluteIndex}] Error:`, error);
 
-                    // Fallback rendering
                     const ctx = canvasElement.getContext('2d');
                     if (ctx) {
                         ctx.fillStyle = '#141414';
@@ -220,7 +288,6 @@ export function createPreviewGallery() {
                 }
             }
 
-            // Load visible previews sequentially
             async function loadVisiblePreviews(items) {
                 console.log(`[GALLERY] Loading ${items.length} visible previews`);
 
@@ -228,7 +295,6 @@ export function createPreviewGallery() {
                     const item = items[renderedIndex];
                     const absoluteIndex = getAbsoluteIndex(renderedIndex);
 
-                    // Skip if already loaded
                     if (loadedCanvases.value[absoluteIndex]) continue;
 
                     await nextTick();
@@ -242,24 +308,27 @@ export function createPreviewGallery() {
                     }
 
                     await render3DPreview(item, canvas, absoluteIndex);
-                    await new Promise(resolve => setTimeout(resolve, 800)); // Delay between renders
+                    await new Promise(resolve => setTimeout(resolve, 800));
                 }
 
                 currentlyLoading.value = -1;
                 console.log(`[GALLERY] ✅ All visible previews loaded`);
             }
 
-            // Load previews when rendered items change
             watch(renderedItems, async (newItems) => {
                 if (!newItems.length) return;
                 await nextTick();
                 await loadVisiblePreviews(newItems);
             });
 
-            // Reset when modal opens/closes
+            onMounted(() => {
+                if (props.visible && allItems.value.length > 0) {
+                    loadSelectedItemFromUrl();
+                }
+            });
+
             watch(() => props.visible, (visible) => {
                 if (visible) {
-                    // Reset to top when opening
                     renderedStart.value = 0;
                     renderedEnd.value = visibleCount + buffer;
                     scrollTop.value = 0;
@@ -285,7 +354,8 @@ export function createPreviewGallery() {
                 getLoadingText,
                 getItemStyle,
                 selectItem,
-                onScroll
+                onScroll,
+                selectedItemId
             };
         }
     };

@@ -110,6 +110,22 @@ const getFreshUrl = (url) => {
   return `${url}${sep}_t=${Date.now()}&_r=${Math.random().toString(36).slice(2)}`;
 };
 
+// URL Query Parameter Management
+const getQueryParam = (key) => {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get(key);
+};
+
+const setQueryParam = (key, value) => {
+  const url = new URL(window.location);
+  if (value) {
+    url.searchParams.set(key, value);
+  } else {
+    url.searchParams.delete(key);
+  }
+  window.history.replaceState({}, '', url);
+};
+
 export const app = (window.app = createApp({
   components: {
     PreviewGallery: createPreviewGallery()
@@ -131,6 +147,12 @@ export const app = (window.app = createApp({
     // Gallery state
     const showGallery = ref(false);
 
+    // Selected item state for URL sync
+    const selectedItem = ref(null);
+
+    // **CRITICAL**: Flag to prevent default preset selection
+    const hasInitialized = ref(false);
+
     // Add pagination state
     const currentSkip = ref(0);
     const itemsPerLoad = ref(100);
@@ -144,12 +166,97 @@ export const app = (window.app = createApp({
         if (!(k in localPresets)) {
           result[k] = {
             ...p,
-            // Set top-down camera for gallery previews
             initialCameraPosition: [50, 50, 150]
           };
         }
       }
       return result;
+    });
+
+    // **NEW**: Gallery URL Parameter Management
+    const getGalleryQueryParam = () => {
+      return getQueryParam('gallery') === 'true';
+    };
+
+    const setGalleryQueryParam = (show) => {
+      if (show) {
+        setQueryParam('gallery', 'true');
+      } else {
+        setQueryParam('gallery', null);
+      }
+    };
+
+    // **NEW**: Initialize gallery state from URL
+    const initializeGalleryFromUrl = () => {
+      const shouldShowGallery = getGalleryQueryParam();
+      if (shouldShowGallery !== showGallery.value) {
+        console.log(`[APP] Setting gallery visibility from URL: ${shouldShowGallery}`);
+        showGallery.value = shouldShowGallery;
+      }
+    };
+
+    // **NEW**: Watch gallery state and update URL
+    watch(showGallery, (newValue) => {
+      if (hasInitialized.value) {
+        console.log(`[APP] Gallery state changed: ${newValue}, updating URL`);
+        setGalleryQueryParam(newValue);
+      }
+    });
+
+    // **FIXED**: Load selected item from URL with proper timing
+    const loadSelectedItemFromUrl = () => {
+      const selectedParam = getQueryParam('selectedItem');
+      if (selectedParam && presets.value[selectedParam]) {
+        console.log(`[APP] Loading selected item from URL: ${selectedParam}`);
+        selectedItem.value = selectedParam;
+        selectedPreset.value = selectedParam;
+        return true;
+      } else if (selectedParam) {
+        console.warn(`[APP] Selected item ${selectedParam} not found in presets, clearing URL param`);
+        setQueryParam('selectedItem', null);
+      }
+      return false;
+    };
+
+    // **FIXED**: Wait for presets to load, then handle URL/default selection
+    const initializeSelection = async () => {
+      // Wait for presets to be loaded
+      if (Object.keys(presets.value).length <= Object.keys(localPresets).length) {
+        console.log('[APP] Waiting for presets to load...');
+        await new Promise((resolve) => {
+          const stopWatching = watch(presets, (newPresets) => {
+            if (Object.keys(newPresets).length > Object.keys(localPresets).length) {
+              console.log('[APP] Presets loaded, proceeding with selection');
+              stopWatching();
+              resolve();
+            }
+          });
+        });
+      }
+
+      // Now check URL parameter first
+      const loadedFromUrl = loadSelectedItemFromUrl();
+
+      if (loadedFromUrl) {
+        console.log('[APP] ✅ Loaded selection from URL, skipping default');
+        // selectedPreset is already set by loadSelectedItemFromUrl
+        hasInitialized.value = true;
+        return selectedPreset.value;
+      } else {
+        console.log(`[APP] No URL selection found, using default: ${defaultPreset}`);
+        selectedItem.value = defaultPreset;
+        selectedPreset.value = defaultPreset;
+        hasInitialized.value = true;
+        return defaultPreset;
+      }
+    };
+
+    // Watch selectedItem and update URL
+    watch(selectedItem, (newItem) => {
+      if (newItem && hasInitialized.value) {
+        console.log(`[APP] Updating URL with selected item: ${newItem}`);
+        setQueryParam('selectedItem', newItem);
+      }
     });
 
     // Enhanced fetchPresets with pagination support
@@ -198,7 +305,6 @@ export const app = (window.app = createApp({
             ...defaultsForDynamic,
             ...(item.settings || {}),
             buildVolume: { x: 100, y: 100, z: 10 },
-            // Set perpendicular camera position from above
             initialCameraPosition: [50, 50, 150],
           };
         });
@@ -258,14 +364,34 @@ export const app = (window.app = createApp({
       await fetchPresets(false);
     };
 
-    // Gallery handler
-    const selectPresetFromGallery = (presetName) => {
+    // **NEW**: Open gallery function with URL sync
+    const openGallery = () => {
+      console.log('[APP] Opening gallery');
+      showGallery.value = true;
+    };
+
+    // **NEW**: Close gallery function with URL sync
+    const closeGallery = () => {
+      console.log('[APP] Closing gallery');
       showGallery.value = false;
+    };
+
+    // Gallery handler with URL sync
+    const selectPresetFromGallery = (presetName) => {
+      console.log(`[APP] Gallery selected preset: ${presetName}`);
+      // showGallery.value = false;
+
+      selectedItem.value = presetName;
       selectPreset(presetName);
     };
 
-    // Watch preset changes
+    // **FIXED**: Only watch preset changes after initialization
     watch(selectedPreset, (preset) => {
+      if (!hasInitialized.value) {
+        console.log('[APP] Skipping preset change before initialization');
+        return;
+      }
+
       if (presetSwitchTimeout) clearTimeout(presetSwitchTimeout);
       presetSwitchTimeout = setTimeout(() => selectPreset(preset), 100);
     });
@@ -434,7 +560,7 @@ export const app = (window.app = createApp({
       }
     };
 
-    // Simple preset selection
+    // Simple preset selection with URL sync
     const selectPreset = async (presetName) => {
       const myToken = ++switchToken;
 
@@ -444,6 +570,11 @@ export const app = (window.app = createApp({
 
         const preset = presets.value[presetName];
         if (!preset) return;
+
+        // Update selected item state for URL sync (only if initialized)
+        if (hasInitialized.value) {
+          selectedItem.value = presetName;
+        }
 
         model.value = preset.model;
         if (myToken !== switchToken) return;
@@ -503,8 +634,22 @@ export const app = (window.app = createApp({
 
     onMounted(async () => {
       try {
-        await fetchPresets(); // Initial load
-        await selectPreset(defaultPreset);
+        console.log('[APP] 🚀 Starting app initialization...');
+
+        // **NEW**: Initialize gallery state from URL first
+        initializeGalleryFromUrl();
+
+        // 1. Fetch presets first
+        await fetchPresets();
+        console.log('[APP] ✅ Presets loaded');
+
+        // 2. Initialize selection (URL takes precedence over default)
+        const selectedPresetName = await initializeSelection();
+        console.log(`[APP] ✅ Selection initialized: ${selectedPresetName}`);
+
+        // 3. Load the selected preset
+        await selectPreset(selectedPresetName);
+        console.log(`[APP] ✅ Preset loaded: ${selectedPresetName}`);
 
         // Setup watchers with better error handling
         watchEffect(() => {
@@ -596,10 +741,15 @@ export const app = (window.app = createApp({
       hasMorePresets,
       currentSkip: readonly(currentSkip),
 
-      // Gallery functionality
+      // **UPDATED**: Gallery functionality with new methods
       showGallery,
       dynamicPresets,
       selectPresetFromGallery,
+      openGallery,   // **NEW**
+      closeGallery,  // **NEW**
+
+      // URL sync functionality
+      selectedItem: readonly(selectedItem),
     };
   }
 }).mount('#app'));

@@ -517,3 +517,13 @@ footer {
   color: var(--my-theme-400);
   font-size: 0.9em;
 }
+
+/* Add to your CSS to highlight selected item */
+.gallery-virtual-item.selected {
+  outline: 2px solid #95dfa1;
+  background-color: rgba(149, 223, 161, 0.1);
+}
+
+.gallery-virtual-item.selected .gallery-preview {
+  border-color: #95dfa1;
+}
