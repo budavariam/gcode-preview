@@ -4,191 +4,81 @@ import * as GCodePreview from 'gcode-preview';
 import { defaultSettings } from './default-settings.js';
 import { parseIntOrDefault } from './utils.js';
 
-const defaultPreset = 'benchy'; // default preset to load
+const defaultPreset = 'benchy';
 const preferDarkMode = window.matchMedia('(prefers-color-scheme: dark)');
 const initialBackgroundColor = preferDarkMode.matches ? '#141414' : '#eee';
-const statsContainer = () => document.querySelector('.sidebar');
 const loadProgressive = ref(true);
 let observer = null;
 let preview = null;
-
-// Enhanced race protection — serialize preset switching
 let switchToken = 0;
 let presetSwitchTimeout = null;
 let renderInProgress = false;
 
-// Helper function to safely get hex color string
-const safeGetHexString = (colorObj, defaultColor = '#000000') => {
-  try {
-    if (!colorObj || typeof colorObj.getHexString !== 'function') {
-      console.warn('[COLOR] Invalid color object, using default:', defaultColor);
+// FIXED: Bulletproof color handling
+const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
+  if (!colorObj) return defaultColor;
+
+  // Handle string colors
+  if (typeof colorObj === 'string') {
+    if (colorObj === '' || colorObj === 'undefined' || colorObj === 'null') {
       return defaultColor;
     }
-    const hex = colorObj.getHexString();
-    return hex ? `#${hex}` : defaultColor;
-  } catch (error) {
-    console.warn('[COLOR] Error getting hex string, using default:', error, defaultColor);
-    return defaultColor;
+    return colorObj.startsWith('#') ? colorObj : `#${colorObj}`;
   }
+
+  // Handle Three.js color objects
+  if (colorObj && typeof colorObj.getHexString === 'function') {
+    try {
+      const hex = colorObj.getHexString();
+      return hex && hex !== '' ? `#${hex}` : defaultColor;
+    } catch {
+      return defaultColor;
+    }
+  }
+
+  return defaultColor;
 };
 
-// Centralized render function with coordination
-const coordinatedRender = async (source = 'unknown') => {
-  if (renderInProgress) {
-    console.log(`[RENDER] Skipping render from ${source} - render already in progress`);
-    return;
-  }
-
-  if (!preview) {
-    console.error(`[RENDER] Preview is null, cannot render (source: ${source})`);
-    return;
-  }
+// Simple render without coordination complexity
+const simpleRender = async () => {
+  if (!preview || renderInProgress) return;
 
   renderInProgress = true;
-  console.log(`[RENDER] Starting coordinated render from ${source} (progressive: ${loadProgressive.value})`);
-
   try {
-    console.log(`[RENDER] Preview state - layers: ${preview.countLayers}, job exists: ${!!preview.job}`);
-
-    // Always use standard rendering for better compatibility
-    console.log('[RENDER] Using standard rendering');
+    // Don't skip zero layer files - let the library handle it
+    console.log(`[RENDER] Rendering - layers: ${preview.countLayers || 'unknown'}`);
     preview.render();
-
-    // Additional render verification
-    console.log('[RENDER] Standard render completed, checking canvas state');
-    const canvas = document.querySelector('canvas.preview');
-    if (canvas) {
-      console.log(`[RENDER] Canvas dimensions: ${canvas.width}x${canvas.height}`);
-      console.log(`[RENDER] Canvas style: ${canvas.style.display}`);
-
-      // Force canvas to be visible
-      if (canvas.style.display === 'none') {
-        console.log('[RENDER] Canvas was hidden, making visible');
-        canvas.style.display = 'block';
-      }
-    } else {
-      console.error('[RENDER] Canvas not found after render!');
-    }
-
   } catch (error) {
-    console.error(`[RENDER] Error during render from ${source}:`, error);
+    console.error('[RENDER] Error:', error);
   } finally {
     renderInProgress = false;
-    console.log(`[RENDER] Render from ${source} completed`);
   }
 };
 
-// Centralized and robustly dispose preview + observers + UI with async cleanup
-// Enhanced disposal with WebGL context cleanup
-// Enhanced disposal without canvas recreation
+// Basic disposal - no complex cleanup
 const disposePreview = async () => {
-  console.log('[DISPOSE] Starting preview disposal');
-
-  // Stop any ongoing renders
-  renderInProgress = false;
-
-  try {
-    if (observer) {
-      console.log('[DISPOSE] Disconnecting observer');
-      observer.disconnect();
-      observer = null;
-      console.log('[DISPOSE] Observer disconnected successfully');
-    }
-  } catch (e) {
-    console.error('[DISPOSE] Observer disconnect failed:', e);
+  if (observer) {
+    observer.disconnect();
+    observer = null;
   }
 
   if (preview) {
     try {
-      console.log('[DISPOSE] Disposing preview object');
-
-      // Deep cleanup of Three.js objects
-      if (preview.scene) {
-        console.log('[DISPOSE] Deep cleaning Three.js scene');
-
-        // Dispose of all geometries
-        preview.scene.traverse((object) => {
-          if (object.geometry) {
-            object.geometry.dispose();
-          }
-          if (object.material) {
-            if (Array.isArray(object.material)) {
-              object.material.forEach(material => material.dispose());
-            } else {
-              object.material.dispose();
-            }
-          }
-          if (object.texture) {
-            object.texture.dispose();
-          }
-        });
-
-        // Clear the scene
-        while (preview.scene.children.length > 0) {
-          preview.scene.remove(preview.scene.children[0]);
-        }
-      }
-
-      // Renderer cleanup
-      if (preview.renderer) {
-        console.log('[DISPOSE] Cleaning renderer render lists');
-        preview.renderer.renderLists.dispose();
-        preview.renderer.dispose();
-      }
-
-      // Standard disposal
       preview.dispose();
-      console.log('[DISPOSE] Preview disposed successfully');
-    } catch (e) {
-      console.error('[DISPOSE] Preview dispose failed:', e);
+    } catch (error) {
+      console.error('[DISPOSE] Error:', error);
     }
     preview = null;
   }
 
-  // Clear canvas without recreation
-  const canvas = document.querySelector('canvas.preview');
-  if (canvas) {
-    console.log('[DISPOSE] Clearing canvas context');
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-    if (gl) {
-      // Clear all WebGL state
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-      gl.finish();
-    }
-  }
-
-  console.log('[DISPOSE] Removing GUI elements');
-  const guiElements = document.querySelectorAll('.lil-gui, .stats');
-  console.log(`[DISPOSE] Found ${guiElements.length} GUI elements to remove`);
-  guiElements.forEach((el) => el.remove());
-
-  // Explicit garbage collection hint
-  if (window.gc) {
-    window.gc();
-  }
-
-  console.log('[DISPOSE] Waiting for cleanup to complete');
-  await new Promise(resolve => setTimeout(resolve, 100));
-  console.log('[DISPOSE] Disposal complete');
+  document.querySelectorAll('.lil-gui, .stats').forEach(el => el.remove());
+  await new Promise(resolve => setTimeout(resolve, 50));
 };
 
-// Helper: unique URL each time for dynamic presets (avoid stale/expired responses)
+// Fresh URL helper
 const getFreshUrl = (url) => {
-  console.log(`[URL] Generating fresh URL for: ${url}`);
-  try {
-    const u = new URL(url, window.location.href);
-    u.searchParams.set('_t', Date.now().toString());
-    u.searchParams.set('_n', Math.random().toString(36).slice(2));
-    const freshUrl = u.toString();
-    console.log(`[URL] Fresh URL generated: ${freshUrl}`);
-    return freshUrl;
-  } catch (e) {
-    console.log(`[URL] URL constructor failed, using string manipulation: ${e.message}`);
-    const sep = url.includes('?') ? '&' : '?';
-    const freshUrl = `${url}${sep}_t=${Date.now()}&_n=${Math.random().toString(36).slice(2)}`;
-    console.log(`[URL] Fresh URL generated via string: ${freshUrl}`);
-    return freshUrl;
-  }
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}_t=${Date.now()}&_r=${Math.random().toString(36).slice(2)}`;
 };
 
 export const app = (window.app = createApp({
@@ -205,22 +95,13 @@ export const app = (window.app = createApp({
     const drawBoundingBox = ref(false);
     const presets = ref(localPresets);
 
-    // Fetch presets from API and merge with local presets
+    // Fetch presets from API
     const fetchPresets = async () => {
-      console.log('[API] Fetching presets from API');
       try {
         const response = await fetch('http://localhost:2727/preview/gcodes?skip=0&limit=300', { cache: 'no-store' });
-        console.log(`[API] Response status: ${response.status}`);
-
-        if (!response.ok) {
-          console.warn(`[API] Failed to fetch presets from API: ${response.status} ${response.statusText}`);
-          return;
-        }
+        if (!response.ok) return;
 
         const apiPresets = await response.json();
-        console.log(`[API] Received ${apiPresets.length} presets from API`);
-
-        // Dynamic presets defaults to match originals (important for stable rendering)
         const defaultsForDynamic = {
           extrusionWidth: 0.45,
           lineHeight: 0.2,
@@ -230,30 +111,19 @@ export const app = (window.app = createApp({
           travelColor: '#00FFFF'
         };
 
-        // Convert API response to presets format with defaults
         const newPresets = {};
-        apiPresets.forEach((item, index) => {
-          console.log(`[API] Processing preset ${index + 1}/${apiPresets.length}: ${item.filename}`);
-          const sourceUrl = item.url;
+        apiPresets.forEach(item => {
           newPresets[item.filename] = {
             title: item.filename,
-            file: sourceUrl,
-            getFileUrl: () => getFreshUrl(sourceUrl), // used when loading
-            model: {
-              name: item.filename
-            },
+            file: item.url,
+            getFileUrl: () => getFreshUrl(item.url),
+            model: { name: item.filename },
             ...defaultsForDynamic,
             ...(item.settings || {}),
-            buildVolume: {
-              x: 300,
-              y: 180,
-              z: 0
-            },
-            // initialCameraPosition: [-20, 20, 1.8]
+            buildVolume: { x: 300, y: 180, z: 0 }
           };
         });
 
-        // Merge: local presets take priority, then add new from API if missing (reactivity-safe)
         const merged = { ...presets.value };
         let addedCount = 0;
         for (const key in newPresets) {
@@ -263,140 +133,79 @@ export const app = (window.app = createApp({
           }
         }
 
-        console.log(`[API] Added ${addedCount} new presets from API`);
-        console.log(`[API] Total presets after merge: ${Object.keys(merged).length}`);
         presets.value = merged;
+        console.log(`[API] Added ${addedCount} new presets`);
       } catch (error) {
-        console.error('[API] Error fetching presets from API:', error);
+        console.error('[API] Error:', error);
       }
     };
 
-    // Debounced preset selection
+    // Watch preset changes
     watch(selectedPreset, (preset) => {
-      console.log(`[WATCH] Preset selection changed to: ${preset}`);
-      if (presetSwitchTimeout) {
-        console.log('[WATCH] Clearing previous preset switch timeout');
-        clearTimeout(presetSwitchTimeout);
-      }
-      presetSwitchTimeout = setTimeout(() => {
-        console.log(`[WATCH] Executing delayed preset selection: ${preset}`);
-        selectPreset(preset);
-      }, 100); // 100ms debounce
+      if (presetSwitchTimeout) clearTimeout(presetSwitchTimeout);
+      presetSwitchTimeout = setTimeout(() => selectPreset(preset), 100);
     });
 
-    const selectTab = (tab) => {
-      console.log(`[UI] Tab selected: ${tab}`);
-      activeTab.value = tab;
-    };
-
-    const addColor = () => {
-      console.log('[UI] Adding color');
-      settings.value.colors.push('#000000');
-    };
-
-    const removeColor = () => {
-      console.log('[UI] Removing color');
-      settings.value.colors.pop();
-    };
-
+    const selectTab = (tab) => activeTab.value = tab;
+    const addColor = () => settings.value.colors.push('#000000');
+    const removeColor = () => settings.value.colors.pop();
     const update = async (evt) => {
-      console.log(`[UPDATE] Update called for: ${evt.detail.filename}`);
-      model.value = {
-        name: evt.detail.filename
-      };
+      model.value = { name: evt.detail.filename };
       applyDevMode(enableDevMode.value);
       updateUI();
     };
 
-    // Update UI with current preview settings
+    // FIXED: Robust UI update with proper color handling
     const updateUI = async () => {
-      console.log('[UI] Updating UI with current preview settings');
-      try {
-        if (!preview) {
-          console.error('[UI] Preview is null, cannot update UI');
-          return;
-        }
+      if (!preview) return;
 
+      try {
         const {
-          parser,
-          countLayers,
-          extrusionColor,
-          topLayerColor,
-          lastSegmentColor,
-          buildVolume,
-          backgroundColor,
-          singleLayerMode,
-          renderTravel,
-          travelColor,
-          renderExtrusion,
-          lineWidth,
-          renderTubes,
-          extrusionWidth,
-          boundingBoxColor
+          parser, countLayers, extrusionColor, topLayerColor, lastSegmentColor,
+          buildVolume, backgroundColor, singleLayerMode, renderTravel, travelColor,
+          renderExtrusion, lineWidth, renderTubes, extrusionWidth, boundingBoxColor
         } = preview;
 
-        console.log(`[UI] Preview data - layers: ${countLayers}, parser exists: ${!!parser}`);
-
-        if (!parser || !parser.metadata) {
-          console.error('[UI] Parser or metadata is missing');
+        if (!parser?.metadata) {
+          console.warn('[UI] Parser or metadata missing');
           return;
         }
 
-        // Check for zero layers and warn
-        if (countLayers === 0) {
-          console.warn('[UI] G-code has zero layers - this may be invalid G-code or processing issue');
-        }
-
+        // Handle thumbnails
         const { thumbnails } = parser.metadata;
-        console.log(`[UI] Thumbnails available: ${Object.keys(thumbnails || {}).length}`);
-
-        // get largest thumbnail available
         if (thumbnails && Object.keys(thumbnails).length > 0) {
-          const thumbnailSizes = Object.keys(thumbnails).map((size) => parseInt(size.split('x')[0]));
-          const largestThumbnailSize = Math.max(...thumbnailSizes);
-          const largestThumbnailKey = Object.keys(thumbnails).find((key) => key.startsWith(`${largestThumbnailSize}x`));
-          thumbnail.value = thumbnails[largestThumbnailKey]?.src;
-          console.log(`[UI] Thumbnail set: ${largestThumbnailKey}`);
+          const sizes = Object.keys(thumbnails).map(s => parseInt(s.split('x')[0]));
+          const largest = Math.max(...sizes);
+          const key = Object.keys(thumbnails).find(k => k.startsWith(`${largest}x`));
+          thumbnail.value = thumbnails[key]?.src;
         } else {
-          console.log('[UI] No thumbnails available');
           thumbnail.value = null;
         }
 
-        layerCount.value = countLayers;
-        console.log(`[UI] Layer count set to: ${countLayers}`);
+        layerCount.value = countLayers || 0;
 
-        // Safe color processing with fallbacks
-        const colors = extrusionColor instanceof Array ? extrusionColor : [extrusionColor];
-        console.log(`[UI] Processing ${colors.length} extrusion colors`);
+        // FIXED: Safe color processing - handle all edge cases
+        const colors = Array.isArray(extrusionColor) ? extrusionColor : [extrusionColor];
+        const validColors = colors.map(c => safeGetHexString(c, '#95dfa1'));
 
-        // Use safe color extraction with fallbacks
-        const safeColors = colors.map((c, index) => {
-          const safeColor = safeGetHexString(c, `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`);
-          console.log(`[UI] Color ${index}: ${safeColor}`);
-          return safeColor;
-        });
-
-        // Ensure all colors are valid hex strings (fix the Vue validation errors)
-        const validColors = safeColors.map(color => {
-          if (!color || color === '' || !color.match(/^#[0-9A-Fa-f]{6}$/)) {
-            return '#95dfa1'; // Default fallback color
-          }
-          return color;
-        });
+        // Ensure we always have at least one valid color
+        if (validColors.length === 0 || validColors.every(c => !c || c === '')) {
+          validColors.push('#95dfa1');
+        }
 
         const currentSettings = {
           startLayer: 1,
           enableStartLayer: false,
           maxLayer: countLayers || 1000,
-          endLayer: countLayers,
+          endLayer: countLayers || 0,
           enableEndLayer: false,
-          singleLayerMode,
-          renderTravel,
+          singleLayerMode: !!singleLayerMode,
+          renderTravel: !!renderTravel,
           travelColor: safeGetHexString(travelColor, '#00FFFF'),
-          renderExtrusion,
-          lineWidth,
-          renderTubes,
-          extrusionWidth,
+          renderExtrusion: !!renderExtrusion,
+          lineWidth: lineWidth || 1,
+          renderTubes: !!renderTubes,
+          extrusionWidth: extrusionWidth || 0.4,
           colors: validColors,
           topLayerColor: safeGetHexString(topLayerColor, '#FF0000'),
           highlightTopLayer: !!topLayerColor,
@@ -405,390 +214,202 @@ export const app = (window.app = createApp({
           buildVolume: buildVolume,
           drawBuildVolume: !!buildVolume,
           backgroundColor: safeGetHexString(backgroundColor, initialBackgroundColor),
-          boundingBoxColor: boundingBoxColor || '#FF00FF'
+          boundingBoxColor: safeGetHexString(boundingBoxColor, '#FF00FF')
         };
 
-        console.log('[UI] Current settings computed:', currentSettings);
         Object.assign(settings.value, currentSettings);
-        preview.endLayer = countLayers;
+        preview.endLayer = countLayers || 0;
         applyDevMode(enableDevMode.value);
 
-        console.log('[UI] UI update completed successfully');
-
+        console.log(`[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}`);
       } catch (error) {
-        console.error('[UI] Error updating UI:', error);
+        console.error('[UI] Error:', error);
       }
     };
 
+    // G-code loading
     const loadGCodeFromServer = async (filename) => {
       const currentToken = switchToken;
-      console.log(`[LOAD] Starting G-code load for: ${filename} (token: ${currentToken})`);
 
       try {
-        // Generate fresh URL right before fetch for dynamic URLs
-        const finalUrl = filename.includes('localhost:2727')
-          ? getFreshUrl(filename)
-          : filename;
-
-        console.log(`[LOAD] Final URL: ${finalUrl}`);
-        console.log(`[LOAD] Making fetch request`);
-
+        const finalUrl = filename.includes('localhost:2727') ? getFreshUrl(filename) : filename;
         const response = await fetch(finalUrl, { cache: 'no-store' });
-        console.log(`[LOAD] Fetch response status: ${response.status}`);
 
-        // Check if we've been superseded
-        if (currentToken !== switchToken) {
-          console.log(`[LOAD] Load operation cancelled - preset switched (current: ${currentToken}, latest: ${switchToken})`);
-          return;
-        }
+        if (currentToken !== switchToken || response.status !== 200) return;
 
-        if (response.status !== 200) {
-          console.error(`[LOAD] HTTP Error. Status Code: ${response.status}`);
-          return;
-        }
-
-        console.log('[LOAD] Setting up G-code stream processing');
         const gcodeStream = response.body
           .pipeThrough(new TextDecoderStream())
           .pipeThrough(new TransformStream({
             transform(chunk, controller) {
-              const cleaned = chunk.replace(/^N\d+\s+/gm, "");
-              controller.enqueue(cleaned);
+              controller.enqueue(chunk.replace(/^N\d+\s+/gm, ""));
             }
           }));
 
-        // Check token again before processing
-        if (currentToken !== switchToken) {
-          console.log(`[LOAD] Load operation cancelled during stream setup (current: ${currentToken}, latest: ${switchToken})`);
-          return;
-        }
+        if (currentToken !== switchToken || !preview) return;
 
-        if (!preview) {
-          console.error('[LOAD] Preview is null, cannot process G-code');
-          return;
-        }
-
-        console.log('[LOAD] Starting G-code processing');
-        const prevDevMode = preview.devMode;
-        preview.devMode = prevDevMode;
-
-        // Process G-code and render immediately
         await preview.processGCode(gcodeStream, { render: false });
-        console.log('[LOAD] G-code processing completed');
 
-        // Check token after processing
-        if (currentToken !== switchToken) {
-          console.log(`[LOAD] Load operation cancelled after processing (current: ${currentToken}, latest: ${switchToken})`);
-          return;
-        }
-
-        // Final token check before UI update
         if (currentToken === switchToken) {
-          console.log('[LOAD] Updating UI after successful G-code load');
           await updateUI();
-
-          // Single coordinated render after all setup is complete
-          console.log('[LOAD] Performing final render after G-code load');
-          await coordinatedRender('loadGCode');
-
-          console.log('[LOAD] G-code load and UI update completed successfully');
-        } else {
-          console.log(`[LOAD] Skipping UI update - token mismatch (current: ${currentToken}, latest: ${switchToken})`);
+          setTimeout(() => simpleRender(), 100);
         }
-
       } catch (error) {
-        console.error('[LOAD] Error processing G-code:', error);
-        console.error('[LOAD] Error stack:', error.stack);
+        console.error('[LOAD] Error:', error);
       }
     };
 
+    // FIXED: Simple preset selection - no canvas recreation
     const selectPreset = async (presetName) => {
       const myToken = ++switchToken;
 
-      console.log(`[PRESET] ========== Starting preset switch to: ${presetName} (token: ${myToken}) ==========`);
-
       try {
-        let canvas = document.querySelector('canvas.preview');
-        if (!canvas) {
-          console.error('[PRESET] Canvas element not found');
-          return;
-        }
-        console.log(`[PRESET] Canvas element found: ${canvas.width}x${canvas.height}`);
+        const canvas = document.querySelector('canvas.preview');
+        if (!canvas) return;
 
         const preset = presets.value[presetName];
-        if (!preset) {
-          console.error(`[PRESET] Preset not found: ${presetName}`);
-          console.log(`[PRESET] Available presets: ${Object.keys(presets.value).join(', ')}`);
-          return;
-        }
-        console.log(`[PRESET] Preset found:`, preset);
+        if (!preset) return;
 
         model.value = preset.model;
+        if (myToken !== switchToken) return;
 
-        // Early exit if superseded
-        if (myToken !== switchToken) {
-          console.log(`[PRESET] Preset switch cancelled - superseded before disposal (${myToken} vs ${switchToken})`);
-          return;
-        }
-
-        // Clear old UI + dispose old preview with async cleanup
-        console.log('[PRESET] Starting disposal of previous preview');
         await disposePreview();
-        console.log('[PRESET] Previous preview disposed');
+        if (myToken !== switchToken) return;
 
-        // Recreate canvas element to ensure fresh WebGL context
-        console.log('[PRESET] Recreating canvas element');
-        const canvasParent = canvas.parentNode;
-        const canvasRect = canvas.getBoundingClientRect();
-        const canvasStyle = window.getComputedStyle(canvas);
-
-        const newCanvas = document.createElement('canvas');
-        newCanvas.className = canvas.className;
-        newCanvas.width = canvas.width;
-        newCanvas.height = canvas.height;
-
-        // Copy important style properties
-        newCanvas.style.width = canvasStyle.width;
-        newCanvas.style.height = canvasStyle.height;
-        newCanvas.style.display = canvasStyle.display;
-        newCanvas.style.position = canvasStyle.position;
-
-        canvasParent.replaceChild(newCanvas, canvas);
-        canvas = newCanvas;
-        console.log(`[PRESET] Canvas recreated: ${canvas.width}x${canvas.height}`);
-
-        // Check token after disposal and canvas recreation
-        if (myToken !== switchToken) {
-          console.log(`[PRESET] Preset switch cancelled - superseded after disposal (${myToken} vs ${switchToken})`);
-          return;
-        }
-
-        // Cascade settings: first defaults, then preset, then overrides
+        // Initialize with existing canvas - no recreation
         const options = {
           ...defaultSettings,
           ...preset,
-          canvas, // Use the new canvas
+          canvas,
           droppable: true,
           backgroundColor: initialBackgroundColor
         };
-        console.log('[PRESET] Preview options prepared:', options);
 
-        // Init new preview
-        console.log('[PRESET] Initializing new preview');
         window['_preview'] = preview = new GCodePreview.init(options);
-        console.log('[PRESET] New preview initialized successfully');
 
-        // Check token before observer setup
         if (myToken !== switchToken) {
-          console.log(`[PRESET] Preset switch cancelled - superseded during init (${myToken} vs ${switchToken})`);
           await disposePreview();
           return;
         }
 
-        // Resize observer
-        console.log('[PRESET] Setting up resize observer');
-        if (observer) {
-          try {
-            observer.disconnect();
-            console.log('[PRESET] Previous observer disconnected');
-          } catch (e) {
-            console.log('[PRESET] Error disconnecting previous observer:', e);
-          }
-        }
+        // Setup observer
+        if (observer) observer.disconnect();
         observer = new ResizeObserver(() => {
-          if (myToken !== switchToken) {
-            console.log(`[OBSERVER] Ignoring resize - outdated token (${myToken} vs ${switchToken})`);
-            return;
-          }
-          console.log('[OBSERVER] Handling resize');
+          if (myToken !== switchToken) return;
           if (preview) {
             preview.resize();
-            // Trigger render after resize
-            setTimeout(() => coordinatedRender('resize'), 50);
+            setTimeout(() => simpleRender(), 50);
           }
         });
         observer.observe(canvas);
-        console.log('[PRESET] Resize observer set up');
 
-        // Apply dev mode
-        console.log('[PRESET] Applying dev mode');
         applyDevMode(enableDevMode.value);
 
-        // Get file URL
-        const fileUrl = typeof preset.getFileUrl === 'function'
-          ? preset.file // Use base URL, let loadGCodeFromServer handle cache-busting
-          : preset.file;
-        console.log(`[PRESET] File URL determined: ${fileUrl}`);
+        const fileUrl = typeof preset.getFileUrl === 'function' ? preset.file : preset.file;
+        if (myToken !== switchToken) return;
 
-        // Check token before loading
-        if (myToken !== switchToken) {
-          console.log(`[PRESET] Preset switch cancelled - superseded before load (${myToken} vs ${switchToken})`);
-          return;
-        }
-
-        // Load gcode fresh
-        console.log('[PRESET] Starting G-code load');
         await loadGCodeFromServer(fileUrl);
 
-        // Final reapply dev mode after load
         if (myToken === switchToken) {
-          console.log('[PRESET] Reapplying dev mode after successful load');
           applyDevMode(enableDevMode.value);
-          console.log(`[PRESET] ========== Successfully completed preset switch to: ${presetName} ==========`);
-        } else {
-          console.log(`[PRESET] Preset switch completed but was superseded (${myToken} vs ${switchToken})`);
         }
       } catch (error) {
-        console.error(`[PRESET] Error during preset switch to ${presetName}:`, error);
-        console.error('[PRESET] Error stack:', error.stack);
+        console.error('[PRESET] Error:', error);
       }
     };
 
     function applyDevMode(enabled) {
-      console.log(`[DEV] Applying dev mode: ${enabled}`);
-      const elements = document.querySelectorAll('.lil-gui, .stats');
-      console.log(`[DEV] Found ${elements.length} dev mode elements`);
-      elements.forEach((el) => (el.style.display = enabled ? 'block' : 'none'));
+      document.querySelectorAll('.lil-gui, .stats').forEach(el =>
+        el.style.display = enabled ? 'block' : 'none'
+      );
     }
 
-    watch(enableDevMode, (newValue) => {
-      console.log(`[WATCH] Dev mode changed to: ${newValue}`);
-      applyDevMode(newValue);
-    });
+    watch(enableDevMode, applyDevMode);
 
     onMounted(async () => {
-      console.log('[MOUNT] Component mounted, starting initialization');
-
       try {
-        console.log('[MOUNT] Fetching presets');
         await fetchPresets();
-
-        console.log(`[MOUNT] Selecting default preset: ${defaultPreset}`);
         await selectPreset(defaultPreset);
 
-        console.log('[MOUNT] Setting up watchers');
-
+        // Setup watchers with better error handling
         watchEffect(() => {
-          if (!preview) {
-            console.log('[WATCH-EFFECT] Preview not available, skipping background/volume update');
-            return;
-          }
-          console.log('[WATCH-EFFECT] Updating background and build volume');
+          if (!preview) return;
           try {
             preview.backgroundColor = settings.value.backgroundColor;
             if (preview.buildVolume && settings.value.drawBuildVolume) {
-              preview.buildVolume.smallGrid = settings.value.buildVolume.smallGrid;
-              preview.buildVolume.x = +settings.value.buildVolume.x;
-              preview.buildVolume.y = +settings.value.buildVolume.y;
-              preview.buildVolume.z = +settings.value.buildVolume.z;
-            }
-            if (!preview.buildVolume && settings.value.drawBuildVolume) {
-              preview.buildVolume = {
+              Object.assign(preview.buildVolume, {
+                smallGrid: settings.value.buildVolume.smallGrid,
                 x: +settings.value.buildVolume.x,
                 y: +settings.value.buildVolume.y,
-                z: +settings.value.buildVolume.z,
-                smallGrid: settings.value.buildVolume.smallGrid
-              };
-            } else if (preview.buildVolume && !settings.value.drawBuildVolume) {
-              preview.buildVolume = undefined;
+                z: +settings.value.buildVolume.z
+              });
             }
-            preview.boundingBoxColor = drawBoundingBox.value ? (settings.value.boundingBoxColor ?? 'magenta') : undefined;
+            preview.boundingBoxColor = drawBoundingBox.value ?
+              (settings.value.boundingBoxColor ?? 'magenta') : undefined;
           } catch (error) {
-            console.error('[WATCH-EFFECT] Error updating background/volume:', error);
+            console.error('[WATCH-EFFECT] Background/volume error:', error);
           }
         });
 
         watchEffect(() => {
-          if (!preview) {
-            console.log('[WATCH-EFFECT] Preview not available, skipping render settings update');
-            return;
-          }
-          console.log('[WATCH-EFFECT] Updating render settings');
+          if (!preview) return;
           try {
-            preview.renderTravel = settings.value.renderTravel;
-            preview.travelColor = settings.value.travelColor;
-            preview.lineWidth = +settings.value.lineWidth;
-            preview.renderExtrusion = settings.value.renderExtrusion;
-            preview.renderTubes = settings.value.renderTubes;
-            preview.extrusionWidth = +settings.value.extrusionWidth;
-            preview.topLayerColor = settings.value.highlightTopLayer ? settings.value.topLayerColor : undefined;
-            preview.lastSegmentColor = settings.value.highlightLastSegment ? settings.value.lastSegmentColor : undefined;
-            // Coordinated render after settings update
-            setTimeout(() => coordinatedRender('watchEffect-renderSettings'), 100);
+            Object.assign(preview, {
+              renderTravel: settings.value.renderTravel,
+              travelColor: settings.value.travelColor,
+              lineWidth: +settings.value.lineWidth,
+              renderExtrusion: settings.value.renderExtrusion,
+              renderTubes: settings.value.renderTubes,
+              extrusionWidth: +settings.value.extrusionWidth,
+              topLayerColor: settings.value.highlightTopLayer ? settings.value.topLayerColor : undefined,
+              lastSegmentColor: settings.value.highlightLastSegment ? settings.value.lastSegmentColor : undefined
+            });
+            setTimeout(() => simpleRender(), 100);
           } catch (error) {
-            console.error('[WATCH-EFFECT] Error updating render settings:', error);
+            console.error('[WATCH-EFFECT] Render settings error:', error);
           }
         });
 
         watchEffect(() => {
-          if (!preview) {
-            console.log('[WATCH-EFFECT] Preview not available, skipping layer settings update');
-            return;
-          }
-          console.log('[WATCH-EFFECT] Updating layer settings');
+          if (!preview) return;
           try {
             const startLayer = parseIntOrDefault(settings.value.startLayer, undefined);
             const endLayer = parseIntOrDefault(settings.value.endLayer, undefined);
             preview.startLayer = settings.value.enableStartLayer ? startLayer : undefined;
             preview.endLayer = settings.value.enableEndLayer ? endLayer : undefined;
           } catch (error) {
-            console.error('[WATCH-EFFECT] Error updating layer settings:', error);
+            console.error('[WATCH-EFFECT] Layer settings error:', error);
           }
         });
 
         watchEffect(() => {
-          if (!preview) {
-            console.log('[WATCH-EFFECT] Preview not available, skipping single layer mode update');
-            return;
-          }
-          console.log('[WATCH-EFFECT] Updating single layer mode');
+          if (!preview) return;
           try {
             preview.singleLayerMode = settings.value.singleLayerMode;
           } catch (error) {
-            console.error('[WATCH-EFFECT] Error updating single layer mode:', error);
+            console.error('[WATCH-EFFECT] Single layer mode error:', error);
           }
         });
 
         watchEffect(() => {
-          if (!preview) {
-            console.log('[WATCH-EFFECT] Preview not available, skipping extrusion color update');
-            return;
-          }
-          console.log('[WATCH-EFFECT] Updating extrusion colors');
+          if (!preview) return;
           try {
-            preview.extrusionColor = settings.value.colors.length === 1 ? settings.value.colors[0] : settings.value.colors;
+            preview.extrusionColor = settings.value.colors.length === 1 ?
+              settings.value.colors[0] : settings.value.colors;
           } catch (error) {
-            console.error('[WATCH-EFFECT] Error updating extrusion colors:', error);
+            console.error('[WATCH-EFFECT] Extrusion color error:', error);
           }
         });
 
-        console.log('[MOUNT] Initialization completed successfully');
       } catch (error) {
-        console.error('[MOUNT] Error during initialization:', error);
-        console.error('[MOUNT] Error stack:', error.stack);
+        console.error('[MOUNT] Error:', error);
       }
     });
 
     return {
-      presets,
-      activeTab,
-      selectedPreset,
-      thumbnail,
-      layerCount,
-      fileSize,
-      model,
-      dragging,
-      settings,
-      loadProgressive,
-      enableDevMode,
-      drawBoundingBox,
-      selectTab,
-      addColor,
-      removeColor,
-      update,
-      resetUI: updateUI,
-      loadGCodeFromServer,
-      selectPreset
+      presets, activeTab, selectedPreset, thumbnail, layerCount, fileSize,
+      model, dragging, settings, loadProgressive, enableDevMode, drawBoundingBox,
+      selectTab, addColor, removeColor, update, resetUI: updateUI,
+      loadGCodeFromServer, selectPreset
     };
   }
 }).mount('#app'));
