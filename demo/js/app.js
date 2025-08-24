@@ -1,4 +1,4 @@
-import { createApp, ref, watch, onMounted, watchEffect, readonly, computed } from 'vue';
+import { createApp, ref, watch, onMounted, onUnmounted, watchEffect, readonly, computed } from 'vue';
 import { presets as localPresets } from './presets.js';
 import * as GCodePreview from 'gcode-preview';
 import { defaultSettings } from './default-settings.js';
@@ -159,6 +159,24 @@ export const app = (window.app = createApp({
     const isLoading = ref(false);
     const hasMorePresets = ref(true);
 
+    // **NEW**: Keyboard navigation state
+    const keyboardNavigation = ref({
+      enabled: true,
+      focusedElement: null,
+      showHelpOverlay: false
+    });
+
+    // **NEW**: Camera controls state
+    const cameraControls = ref({
+      moveSpeed: 10,
+      rotateSpeed: 0.1,
+      zoomSpeed: 5
+    });
+
+    // **NEW**: Mouse tracking state for zoom-to-cursor
+    const mousePosition = ref({ x: 0, y: 0 });
+    const isMouseOverCanvas = ref(false);
+
     // Dynamic presets: filter only non-static ones
     const dynamicPresets = computed(() => {
       const result = {};
@@ -173,7 +191,588 @@ export const app = (window.app = createApp({
       return result;
     });
 
-    // **NEW**: Gallery URL Parameter Management
+    // **NEW**: Navigate through presets with debugging
+    const navigatePresets = (direction) => {
+      console.log(`[KEYBOARD] Navigating presets: ${direction}`);
+      const presetKeys = Object.keys(presets.value);
+      const currentIndex = presetKeys.indexOf(selectedPreset.value);
+
+      console.log(`[KEYBOARD] Current preset: ${selectedPreset.value}, index: ${currentIndex}, total: ${presetKeys.length}`);
+
+      if (currentIndex === -1) {
+        console.warn('[KEYBOARD] Current preset not found in list');
+        return;
+      }
+
+      let newIndex;
+      if (direction === 'next') {
+        newIndex = (currentIndex + 1) % presetKeys.length;
+      } else {
+        newIndex = currentIndex === 0 ? presetKeys.length - 1 : currentIndex - 1;
+      }
+
+      const newPreset = presetKeys[newIndex];
+      console.log(`[KEYBOARD] Switching to preset: ${newPreset} (index: ${newIndex})`);
+      selectedPreset.value = newPreset;
+    };
+
+    // **NEW**: Reset camera to initial position with debugging
+    const resetCameraView = () => {
+      console.log('[KEYBOARD] Resetting camera view');
+      if (!preview || !preview.camera) {
+        console.warn('[KEYBOARD] Preview or camera not available');
+        return;
+      }
+
+      try {
+        const preset = presets.value[selectedPreset.value];
+        if (preset && preset.initialCameraPosition) {
+          const [x, y, z] = preset.initialCameraPosition;
+          preview.camera.position.set(x, y, z);
+          console.log(`[KEYBOARD] Set camera to preset position: [${x}, ${y}, ${z}]`);
+        } else {
+          // Default camera position
+          preview.camera.position.set(50, 50, 150);
+          console.log('[KEYBOARD] Set camera to default position: [50, 50, 150]');
+        }
+
+        // Reset controls target to center
+        if (preview.controls && preview.controls.target) {
+          preview.controls.target.set(0, 0, 0);
+          preview.controls.update();
+        }
+
+        simpleRender();
+        console.log('[KEYBOARD] Camera reset complete');
+      } catch (error) {
+        console.error('[KEYBOARD] Camera reset error:', error);
+      }
+    };
+
+    // **NEW**: Fit model to screen with debugging
+    const fitToScreen = () => {
+      console.log('[KEYBOARD] Fitting to screen');
+      if (!preview || !preview.camera || !preview.scene) {
+        console.warn('[KEYBOARD] Preview, camera, or scene not available');
+        return;
+      }
+
+      try {
+        // Check if THREE is available
+        if (typeof window.THREE === 'undefined') {
+          console.error('[KEYBOARD] THREE.js not available on window object');
+          return;
+        }
+
+        const box = new window.THREE.Box3();
+        box.setFromObject(preview.scene);
+
+        const center = box.getCenter(new window.THREE.Vector3());
+        const size = box.getSize(new window.THREE.Vector3());
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = preview.camera.fov * (Math.PI / 180);
+        const distance = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
+
+        preview.camera.position.copy(center);
+        preview.camera.position.z += distance;
+
+        if (preview.controls && preview.controls.target) {
+          preview.controls.target.copy(center);
+          preview.controls.update();
+        }
+
+        simpleRender();
+        console.log('[KEYBOARD] Fit to screen complete');
+      } catch (error) {
+        console.error('[KEYBOARD] Fit to screen error:', error);
+      }
+    };
+
+    // **NEW**: Enhanced zoom toward mouse cursor
+    const zoomTowardMouse = (deltaZ) => {
+      if (!preview || !preview.camera || typeof window.THREE === 'undefined') {
+        // Fallback to regular zoom
+        preview.camera.position.z += deltaZ;
+        if (preview.controls) preview.controls.update();
+        simpleRender();
+        return;
+      }
+
+      try {
+        const canvas = document.querySelector('canvas.preview');
+        if (!canvas) {
+          preview.camera.position.z += deltaZ;
+          if (preview.controls) preview.controls.update();
+          simpleRender();
+          return;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+
+        // Convert mouse position to normalized device coordinates (-1 to +1)
+        const mouse = new window.THREE.Vector2();
+        mouse.x = ((mousePosition.value.x - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((mousePosition.value.y - rect.top) / rect.height) * 2 + 1;
+
+        // Create raycaster to find 3D point under mouse
+        const raycaster = new window.THREE.Raycaster();
+        raycaster.setFromCamera(mouse, preview.camera);
+
+        // Try to intersect with scene objects
+        const intersects = raycaster.intersectObjects(preview.scene.children, true);
+
+        let targetPoint;
+        if (intersects.length > 0) {
+          // Use intersection point
+          targetPoint = intersects[0].point.clone();
+          console.log(`[ZOOM] Found intersection at [${targetPoint.x.toFixed(2)}, ${targetPoint.y.toFixed(2)}, ${targetPoint.z.toFixed(2)}]`);
+        } else {
+          // Use controls target or scene center as fallback
+          if (preview.controls && preview.controls.target) {
+            targetPoint = preview.controls.target.clone();
+          } else {
+            targetPoint = new window.THREE.Vector3(0, 0, 0);
+          }
+          console.log(`[ZOOM] No intersection, using fallback point [${targetPoint.x.toFixed(2)}, ${targetPoint.y.toFixed(2)}, ${targetPoint.z.toFixed(2)}]`);
+        }
+
+        // Calculate zoom direction (toward or away from target point)
+        const cameraToTarget = new window.THREE.Vector3();
+        cameraToTarget.subVectors(targetPoint, preview.camera.position);
+        const distance = cameraToTarget.length();
+
+        // Normalize direction
+        cameraToTarget.normalize();
+
+        // Calculate movement distance (percentage of current distance)
+        const zoomFactor = 0.1; // 10% of current distance
+        const moveDistance = distance * zoomFactor;
+
+        // Move camera toward (negative deltaZ) or away (positive deltaZ) from target
+        const moveVector = cameraToTarget.multiplyScalar(deltaZ < 0 ? moveDistance : -moveDistance);
+        preview.camera.position.add(moveVector);
+
+        // Update controls if available
+        if (preview.controls) {
+          preview.controls.update();
+        }
+
+        simpleRender();
+
+        console.log(`[ZOOM] Zoomed ${deltaZ < 0 ? 'toward' : 'away from'} point [${targetPoint.x.toFixed(2)}, ${targetPoint.y.toFixed(2)}, ${targetPoint.z.toFixed(2)}]`);
+
+      } catch (error) {
+        console.error('[ZOOM] Mouse zoom error:', error);
+        // Fallback to regular zoom
+        preview.camera.position.z += deltaZ;
+        if (preview.controls) preview.controls.update();
+        simpleRender();
+      }
+    };
+
+    // **NEW**: Enhanced camera movement with mouse-aware zooming
+    const moveCameraBy = (deltaX, deltaY, deltaZ, useMousePosition = false) => {
+      console.log(`[KEYBOARD] Moving camera by: [${deltaX}, ${deltaY}, ${deltaZ}], mouse-aware: ${useMousePosition}`);
+      if (!preview || !preview.camera) {
+        console.warn('[KEYBOARD] Preview or camera not available for movement');
+        return;
+      }
+
+      try {
+        if (deltaZ !== 0 && useMousePosition && isMouseOverCanvas.value) {
+          // Zoom toward mouse cursor
+          zoomTowardMouse(deltaZ);
+        } else {
+          // Regular movement
+          const oldPos = preview.camera.position.clone();
+          preview.camera.position.x += deltaX;
+          preview.camera.position.y += deltaY;
+          preview.camera.position.z += deltaZ;
+
+          console.log(`[KEYBOARD] Camera moved from [${oldPos.x}, ${oldPos.y}, ${oldPos.z}] to [${preview.camera.position.x}, ${preview.camera.position.y}, ${preview.camera.position.z}]`);
+
+          if (preview.controls) {
+            preview.controls.update();
+          }
+          simpleRender();
+        }
+      } catch (error) {
+        console.error('[KEYBOARD] Camera movement error:', error);
+      }
+    };
+
+    // **NEW**: Layer navigation functions with debugging
+    const changeLayer = (direction, type = 'end') => {
+      const increment = direction === 'up' ? 1 : -1;
+      console.log(`[KEYBOARD] Changing ${type} layer by ${increment}`);
+
+      if (type === 'end' && settings.value.enableEndLayer) {
+        const oldValue = settings.value.endLayer;
+        const newValue = settings.value.endLayer + increment;
+        settings.value.endLayer = Math.max(1, Math.min(newValue, layerCount.value));
+        console.log(`[KEYBOARD] End layer changed from ${oldValue} to ${settings.value.endLayer}`);
+      } else if (type === 'start' && settings.value.enableStartLayer) {
+        const oldValue = settings.value.startLayer;
+        const newValue = settings.value.startLayer + increment;
+        settings.value.startLayer = Math.max(1, Math.min(newValue, layerCount.value));
+        console.log(`[KEYBOARD] Start layer changed from ${oldValue} to ${settings.value.startLayer}`);
+      } else {
+        console.log(`[KEYBOARD] Layer change skipped - ${type} layer not enabled`);
+        return;
+      }
+
+      simpleRender();
+    };
+
+    // **NEW**: Toggle functions with debugging
+    const toggleSetting = (settingName, displayName) => {
+      const oldValue = settings.value[settingName];
+      settings.value[settingName] = !oldValue;
+      console.log(`[KEYBOARD] Toggled ${displayName}: ${oldValue} -> ${settings.value[settingName]}`);
+      simpleRender();
+    };
+
+    // **NEW**: Mouse tracking for zoom-to-cursor functionality
+    const handleMouseMove = (e) => {
+      mousePosition.value = { x: e.clientX, y: e.clientY };
+    };
+
+    const handleMouseEnter = () => {
+      isMouseOverCanvas.value = true;
+      console.log('[MOUSE] Mouse entered canvas');
+    };
+
+    const handleMouseLeave = () => {
+      isMouseOverCanvas.value = false;
+      console.log('[MOUSE] Mouse left canvas');
+    };
+
+    // **NEW**: Enhanced wheel zoom handler with zoom-to-cursor
+    const handleWheel = (e) => {
+      if (!isMouseOverCanvas.value || !keyboardNavigation.value.enabled) return;
+      e.preventDefault();
+
+      const deltaZ = e.deltaY > 0 ? cameraControls.value.zoomSpeed : -cameraControls.value.zoomSpeed;
+      console.log(`[WHEEL] Mouse wheel zoom: ${deltaZ}`);
+      zoomTowardMouse(deltaZ);
+    };
+
+    // **NEW**: Setup enhanced OrbitControls
+    const setupOrbitControls = () => {
+      if (!preview || !preview.controls) return;
+
+      try {
+        const controls = preview.controls;
+
+        // Enable zoom to cursor if supported
+        if (controls.zoomToCursor !== undefined) {
+          controls.zoomToCursor = true;
+          console.log('[CONTROLS] Enabled zoomToCursor on OrbitControls');
+        }
+
+        // Configure other control properties
+        if (controls.enableZoom !== undefined) {
+          controls.enableZoom = true;
+        }
+
+        if (controls.zoomSpeed !== undefined) {
+          controls.zoomSpeed = 1.0;
+        }
+
+        if (controls.panSpeed !== undefined) {
+          controls.panSpeed = 2.0;
+        }
+
+        if (controls.rotateSpeed !== undefined) {
+          controls.rotateSpeed = 1.0;
+        }
+
+        console.log('[CONTROLS] OrbitControls configured for optimal zoom behavior');
+
+      } catch (error) {
+        console.error('[CONTROLS] Error setting up orbit controls:', error);
+      }
+    };
+
+    // **NEW**: Keyboard shortcuts configuration with enhanced zoom
+    const keyboardShortcuts = {
+      // Gallery navigation
+      'g': () => {
+        console.log('[KEYBOARD] Gallery toggle pressed');
+        showGallery.value ? closeGallery() : openGallery();
+      },
+      'Escape': () => {
+        console.log('[KEYBOARD] Escape pressed');
+        if (keyboardNavigation.value.showHelpOverlay) {
+          keyboardNavigation.value.showHelpOverlay = false;
+        } else if (showGallery.value) {
+          closeGallery();
+        }
+      },
+
+      // Tab navigation
+      '1': () => {
+        console.log('[KEYBOARD] Tab 1 pressed - layers');
+        selectTab('layers');
+      },
+      '2': () => {
+        console.log('[KEYBOARD] Tab 2 pressed - visual');
+        selectTab('visual');
+      },
+      '3': () => {
+        console.log('[KEYBOARD] Tab 3 pressed - printer');
+        selectTab('printer');
+      },
+
+      // Layer controls
+      'ArrowUp': (e) => {
+        e.preventDefault();
+        console.log(`[KEYBOARD] Arrow Up pressed ${e.shiftKey ? 'with Shift' : ''}`);
+        if (e.shiftKey) {
+          changeLayer('up', 'start');
+        } else {
+          changeLayer('up', 'end');
+        }
+      },
+      'ArrowDown': (e) => {
+        e.preventDefault();
+        console.log(`[KEYBOARD] Arrow Down pressed ${e.shiftKey ? 'with Shift' : ''}`);
+        if (e.shiftKey) {
+          changeLayer('down', 'start');
+        } else {
+          changeLayer('down', 'end');
+        }
+      },
+      'ArrowLeft': (e) => {
+        e.preventDefault();
+        console.log(`[KEYBOARD] Arrow Left pressed ${e.ctrlKey || e.metaKey ? 'with Ctrl/Cmd' : ''}`);
+        if (e.ctrlKey || e.metaKey) {
+          moveCameraBy(-cameraControls.value.moveSpeed, 0, 0);
+        } else {
+          navigatePresets('previous');
+        }
+      },
+      'ArrowRight': (e) => {
+        e.preventDefault();
+        console.log(`[KEYBOARD] Arrow Right pressed ${e.ctrlKey || e.metaKey ? 'with Ctrl/Cmd' : ''}`);
+        if (e.ctrlKey || e.metaKey) {
+          moveCameraBy(cameraControls.value.moveSpeed, 0, 0);
+        } else {
+          navigatePresets('next');
+        }
+      },
+
+      // Preset navigation
+      'p': () => {
+        console.log('[KEYBOARD] P pressed - previous preset');
+        navigatePresets('previous');
+      },
+      'n': () => {
+        console.log('[KEYBOARD] N pressed - next preset');
+        navigatePresets('next');
+      },
+
+      // View controls
+      'r': () => {
+        console.log('[KEYBOARD] R pressed - reset camera');
+        resetCameraView();
+      },
+      'f': () => {
+        console.log('[KEYBOARD] F pressed - fit to screen');
+        fitToScreen();
+      },
+
+      // Camera movement (WASD + QE) with enhanced zoom
+      'w': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] W pressed - move up');
+        moveCameraBy(0, cameraControls.value.moveSpeed, 0);
+      },
+      'a': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] A pressed - move left');
+        moveCameraBy(-cameraControls.value.moveSpeed, 0, 0);
+      },
+      's': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] S pressed - move down');
+        moveCameraBy(0, -cameraControls.value.moveSpeed, 0);
+      },
+      'd': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] D pressed - move right');
+        moveCameraBy(cameraControls.value.moveSpeed, 0, 0);
+      },
+      'q': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] Q pressed - zoom in (mouse-aware)');
+        moveCameraBy(0, 0, -cameraControls.value.zoomSpeed, true);
+      },
+      'e': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] E pressed - zoom out (mouse-aware)');
+        moveCameraBy(0, 0, cameraControls.value.zoomSpeed, true);
+      },
+
+      // Toggle features
+      't': () => {
+        console.log('[KEYBOARD] T pressed - toggle travel');
+        toggleSetting('renderTravel', 'travel rendering');
+      },
+      'x': () => {
+        console.log('[KEYBOARD] X pressed - toggle extrusion');
+        toggleSetting('renderExtrusion', 'extrusion rendering');
+      },
+      'b': () => {
+        console.log('[KEYBOARD] B pressed - toggle build volume');
+        toggleSetting('drawBuildVolume', 'build volume display');
+      },
+      'l': () => {
+        console.log('[KEYBOARD] L pressed - toggle single layer mode');
+        toggleSetting('singleLayerMode', 'single layer mode');
+      },
+
+      // Layer enable/disable
+      '[': () => {
+        console.log('[KEYBOARD] [ pressed - toggle start layer');
+        toggleSetting('enableStartLayer', 'start layer control');
+      },
+      ']': () => {
+        console.log('[KEYBOARD] ] pressed - toggle end layer');
+        toggleSetting('enableEndLayer', 'end layer control');
+      },
+
+      // Dev mode and help
+      'F12': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] F12 pressed - toggle dev mode');
+        enableDevMode.value = !enableDevMode.value;
+      },
+      'h': () => {
+        console.log('[KEYBOARD] H pressed - toggle help');
+        keyboardNavigation.value.showHelpOverlay = !keyboardNavigation.value.showHelpOverlay;
+      },
+      '?': () => {
+        console.log('[KEYBOARD] ? pressed - toggle help');
+        keyboardNavigation.value.showHelpOverlay = !keyboardNavigation.value.showHelpOverlay;
+      },
+
+      // Page navigation for presets
+      'PageUp': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] PageUp pressed - skip 5 presets back');
+        for (let i = 0; i < 5; i++) {
+          navigatePresets('previous');
+        }
+      },
+      'PageDown': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] PageDown pressed - skip 5 presets forward');
+        for (let i = 0; i < 5; i++) {
+          navigatePresets('next');
+        }
+      },
+
+      // Quick layer jumps
+      'End': (e) => {
+        e.preventDefault();
+        console.log('[KEYBOARD] End pressed - jump to last layer');
+        if (settings.value.enableEndLayer) {
+          const oldValue = settings.value.endLayer;
+          settings.value.endLayer = layerCount.value;
+          console.log(`[KEYBOARD] End layer set from ${oldValue} to ${settings.value.endLayer}`);
+          simpleRender();
+        }
+      },
+      'Home': (e) => {
+        e.preventDefault();
+        console.log(`[KEYBOARD] Home pressed ${e.shiftKey ? 'with Shift' : ''}`);
+        if (e.shiftKey && settings.value.enableStartLayer) {
+          const oldValue = settings.value.startLayer;
+          settings.value.startLayer = 1;
+          console.log(`[KEYBOARD] Start layer set from ${oldValue} to 1`);
+          simpleRender();
+        } else {
+          resetCameraView();
+        }
+      }
+    };
+
+    // **NEW**: Enhanced keyboard event handler
+    const handleKeydown = (e) => {
+      console.log(`[KEYBOARD DEBUG] Key pressed: "${e.key}", enabled: ${keyboardNavigation.value.enabled}, target: ${e.target.tagName}`);
+
+      if (!keyboardNavigation.value.enabled) {
+        console.log('[KEYBOARD DEBUG] Navigation disabled, ignoring key');
+        return;
+      }
+
+      // Don't intercept if user is typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+        console.log('[KEYBOARD DEBUG] Ignoring - user typing in input field');
+        return;
+      }
+
+      const key = e.key;
+      const handler = keyboardShortcuts[key];
+
+      if (handler) {
+        console.log(`[KEYBOARD DEBUG] Executing handler for key: "${key}"`);
+        try {
+          handler(e);
+          console.log(`[KEYBOARD DEBUG] Handler executed successfully for key: "${key}"`);
+        } catch (error) {
+          console.error(`[KEYBOARD] Error handling key ${key}:`, error);
+        }
+      }
+    };
+
+    // **NEW**: Toggle keyboard navigation
+    const toggleKeyboardNavigation = () => {
+      keyboardNavigation.value.enabled = !keyboardNavigation.value.enabled;
+      console.log(`[KEYBOARD] Navigation ${keyboardNavigation.value.enabled ? 'enabled' : 'disabled'}`);
+    };
+
+    // **DEBUG**: Manual test functions
+    const testKeyboard = () => {
+      console.log('[KEYBOARD TEST] Testing keyboard navigation');
+      console.log('Current state:', keyboardNavigation.value);
+      console.log('Available presets:', Object.keys(presets.value));
+      console.log('Current preset:', selectedPreset.value);
+      console.log('Preview available:', !!preview);
+      navigatePresets('next');
+    };
+
+    const forceEnableKeyboard = () => {
+      keyboardNavigation.value.enabled = true;
+      console.log('[KEYBOARD] Force enabled keyboard navigation');
+    };
+
+    const debugKeyboardState = () => {
+      console.log('[KEYBOARD DEBUG] Full state dump:', {
+        enabled: keyboardNavigation.value.enabled,
+        hasPreview: !!preview,
+        selectedPreset: selectedPreset.value,
+        presetCount: Object.keys(presets.value).length,
+        shortcuts: Object.keys(keyboardShortcuts),
+        layerCount: layerCount.value,
+        mouseOverCanvas: isMouseOverCanvas.value,
+        mousePosition: mousePosition.value,
+        settings: {
+          enableStartLayer: settings.value.enableStartLayer,
+          enableEndLayer: settings.value.enableEndLayer,
+          startLayer: settings.value.startLayer,
+          endLayer: settings.value.endLayer
+        },
+        camera: preview ? {
+          position: preview.camera ? [preview.camera.position.x, preview.camera.position.y, preview.camera.position.z] : 'no camera',
+          hasControls: !!preview.controls
+        } : 'no preview'
+      });
+    };
+
+    // Gallery URL Parameter Management
     const getGalleryQueryParam = () => {
       return getQueryParam('gallery') === 'true';
     };
@@ -186,7 +785,7 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Initialize gallery state from URL
+    // Initialize gallery state from URL
     const initializeGalleryFromUrl = () => {
       const shouldShowGallery = getGalleryQueryParam();
       if (shouldShowGallery !== showGallery.value) {
@@ -195,7 +794,7 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Watch gallery state and update URL
+    // Watch gallery state and update URL
     watch(showGallery, (newValue) => {
       if (hasInitialized.value) {
         console.log(`[APP] Gallery state changed: ${newValue}, updating URL`);
@@ -203,7 +802,7 @@ export const app = (window.app = createApp({
       }
     });
 
-    // **FIXED**: Load selected item from URL with proper timing
+    // Load selected item from URL with proper timing
     const loadSelectedItemFromUrl = () => {
       const selectedParam = getQueryParam('selectedItem');
       if (selectedParam && presets.value[selectedParam]) {
@@ -213,13 +812,12 @@ export const app = (window.app = createApp({
         return true;
       } else if (selectedParam) {
         console.warn(`[APP] Selected item ${selectedParam} not found in presets, will try to load more`);
-        // Don't clear URL param immediately - we'll try to find it
         return selectedParam;
       }
       return false;
     };
 
-    // **NEW**: Enhanced loadMorePresets to handle specific item search
+    // Enhanced loadMorePresets to handle specific item search
     const loadMorePresetsUntilFound = async (targetItem, maxAttempts = 5) => {
       let attempts = 0;
 
@@ -233,9 +831,8 @@ export const app = (window.app = createApp({
       return presets.value[targetItem] !== undefined;
     };
 
-    // **FIXED**: Enhanced initializeSelection to handle missing items
+    // Enhanced initializeSelection to handle missing items
     const initializeSelection = async () => {
-      // Wait for presets to be loaded
       if (Object.keys(presets.value).length <= Object.keys(localPresets).length) {
         console.log('[APP] Waiting for presets to load...');
         await new Promise((resolve) => {
@@ -249,24 +846,19 @@ export const app = (window.app = createApp({
         });
       }
 
-      // **NEW**: Check URL parameter and handle missing items
       const selectedParam = getQueryParam('selectedItem');
       if (selectedParam) {
         if (presets.value[selectedParam]) {
-          // Item exists in loaded presets
           console.log(`[APP] ✅ Found URL selection in loaded presets: ${selectedParam}`);
           selectedItem.value = selectedParam;
           selectedPreset.value = selectedParam;
           hasInitialized.value = true;
           return selectedParam;
         } else {
-          // **NEW**: Item not in current presets - try to load more or wait
           console.log(`[APP] ⚠️ URL selection '${selectedParam}' not found in current presets, attempting to load more...`);
 
-          // Try loading more presets to find the item
           const found = await loadMorePresetsUntilFound(selectedParam, 3);
 
-          // Check again after loading attempts
           if (found && presets.value[selectedParam]) {
             console.log(`[APP] ✅ Found URL selection after loading more presets: ${selectedParam}`);
             selectedItem.value = selectedParam;
@@ -274,18 +866,15 @@ export const app = (window.app = createApp({
             hasInitialized.value = true;
             return selectedParam;
           } else {
-            // **NEW**: Still not found - preserve URL param but load default for now
             console.warn(`[APP] ⚠️ URL selection '${selectedParam}' not found after loading attempts`);
             console.log(`[APP] Preserving URL parameter but loading default preset for now`);
-            // Don't clear the URL parameter - keep it for potential future loads
-            selectedItem.value = selectedParam; // Keep URL selection in state
-            selectedPreset.value = defaultPreset; // But load default for display
+            selectedItem.value = selectedParam;
+            selectedPreset.value = defaultPreset;
             hasInitialized.value = true;
             return defaultPreset;
           }
         }
       } else {
-        // No URL parameter - use default
         console.log(`[APP] No URL selection found, using default: ${defaultPreset}`);
         selectedItem.value = defaultPreset;
         selectedPreset.value = defaultPreset;
@@ -407,30 +996,29 @@ export const app = (window.app = createApp({
       await fetchPresets(false);
     };
 
-    // **NEW**: Open gallery function with URL sync
+    // Open gallery function with URL sync
     const openGallery = () => {
       console.log('[APP] Opening gallery');
       showGallery.value = true;
     };
 
-    // **NEW**: Close gallery function with URL sync
+    // Close gallery function with URL sync
     const closeGallery = () => {
       console.log('[APP] Closing gallery');
       showGallery.value = false;
     };
 
-    // **UPDATED**: Enhanced selectPresetFromGallery to handle missing items
+    // Enhanced selectPresetFromGallery to handle missing items
     const selectPresetFromGallery = async (presetName) => {
       console.log(`[APP] Gallery selected preset: ${presetName}`);
 
-      // Check if preset exists, if not try to load it
       if (!presets.value[presetName]) {
         console.log(`[APP] Preset '${presetName}' not in current list, trying to load more...`);
         const found = await loadMorePresetsUntilFound(presetName);
 
         if (!found) {
           console.error(`[APP] Could not find preset '${presetName}' after loading more presets`);
-          return; // Don't proceed if we can't find the preset
+          return;
         }
       }
 
@@ -438,7 +1026,7 @@ export const app = (window.app = createApp({
       selectPreset(presetName);
     };
 
-    // **FIXED**: Only watch preset changes after initialization
+    // Only watch preset changes after initialization
     watch(selectedPreset, (preset) => {
       if (!hasInitialized.value) {
         console.log('[APP] Skipping preset change before initialization');
@@ -449,7 +1037,11 @@ export const app = (window.app = createApp({
       presetSwitchTimeout = setTimeout(() => selectPreset(preset), 100);
     });
 
-    const selectTab = (tab) => activeTab.value = tab;
+    const selectTab = (tab) => {
+      console.log(`[UI] Selecting tab: ${tab}`);
+      activeTab.value = tab;
+    };
+
     const addColor = () => settings.value.colors.push('#000000');
     const removeColor = () => settings.value.colors.pop();
     const update = async (evt) => {
@@ -670,6 +1262,8 @@ export const app = (window.app = createApp({
         await loadGCodeFromServer(fileUrl);
 
         if (myToken === switchToken) {
+          // **NEW**: Setup enhanced controls after preview is loaded
+          setupOrbitControls();
           applyDevMode(enableDevMode.value);
         }
       } catch (error) {
@@ -689,7 +1283,32 @@ export const app = (window.app = createApp({
       try {
         console.log('[APP] 🚀 Starting app initialization...');
 
-        // **NEW**: Initialize gallery state from URL first
+        // **NEW**: Add all event listeners
+        console.log('[EVENT DEBUG] Adding event listeners');
+        document.addEventListener('keydown', handleKeydown);
+        window.addEventListener('keydown', handleKeydown);
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('wheel', handleWheel, { passive: false });
+
+        // **NEW**: Focus management for keyboard events
+        if (document.body) {
+          document.body.setAttribute('tabindex', '0');
+          document.body.focus();
+          console.log('[EVENT DEBUG] Body focused for keyboard input');
+        }
+
+        // **NEW**: Setup canvas-specific mouse listeners after delay
+        setTimeout(() => {
+          const canvas = document.querySelector('canvas.preview');
+          if (canvas) {
+            canvas.setAttribute('tabindex', '0');
+            canvas.addEventListener('mouseenter', handleMouseEnter);
+            canvas.addEventListener('mouseleave', handleMouseLeave);
+            console.log('[EVENT DEBUG] Canvas mouse listeners added');
+          }
+        }, 2000);
+
+        // Initialize gallery state from URL first
         initializeGalleryFromUrl();
 
         // 1. Fetch presets first
@@ -774,8 +1393,25 @@ export const app = (window.app = createApp({
           }
         });
 
+        console.log('[APP] ✅ Initialization complete with zoom-to-cursor functionality');
+
       } catch (error) {
         console.error('[MOUNT] Error:', error);
+      }
+    });
+
+    // **NEW**: Enhanced cleanup
+    onUnmounted(() => {
+      console.log('[CLEANUP] Removing all event listeners');
+      document.removeEventListener('keydown', handleKeydown);
+      window.removeEventListener('keydown', handleKeydown);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('wheel', handleWheel);
+
+      const canvas = document.querySelector('canvas.preview');
+      if (canvas) {
+        canvas.removeEventListener('mouseenter', handleMouseEnter);
+        canvas.removeEventListener('mouseleave', handleMouseLeave);
       }
     });
 
@@ -794,15 +1430,32 @@ export const app = (window.app = createApp({
       hasMorePresets,
       currentSkip: readonly(currentSkip),
 
-      // **UPDATED**: Gallery functionality with new methods
+      // Gallery functionality with new methods
       showGallery,
       dynamicPresets,
       selectPresetFromGallery,
-      openGallery,   // **NEW**
-      closeGallery,  // **NEW**
+      openGallery,
+      closeGallery,
 
       // URL sync functionality
       selectedItem: readonly(selectedItem),
+
+      // **NEW**: Enhanced keyboard navigation and zoom returns
+      keyboardNavigation: readonly(keyboardNavigation),
+      toggleKeyboardNavigation,
+      navigatePresets,
+      resetCameraView,
+      fitToScreen,
+      cameraControls,
+
+      // **NEW**: Mouse tracking and zoom functionality
+      mousePosition: readonly(mousePosition),
+      isMouseOverCanvas: readonly(isMouseOverCanvas),
+
+      // **DEBUG**: Debug functions
+      testKeyboard,
+      forceEnableKeyboard,
+      debugKeyboardState
     };
   }
 }).mount('#app'));
