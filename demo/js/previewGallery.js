@@ -1,6 +1,13 @@
-// PreviewGallery.js - VIRTUALIZED INFINITE SCROLL
+// PreviewGallery.js - USING SHARED WEBGL CONTEXT
 import { ref, watch, computed, nextTick, getCurrentInstance } from 'vue';
-import { loadGCodeFromServer, createPreviewInstance, renderGCodePreview } from './gcode-utils.js';
+import {
+    loadGCodeFromServer,
+    createPreviewInstance,
+    renderGCodePreview,
+    disposeGalleryPreview,
+    disposeAllGalleryPreviews,
+    getWebGLStatus
+} from './gcode-utils.js';
 
 export function createPreviewGallery() {
     return {
@@ -55,9 +62,9 @@ export function createPreviewGallery() {
             // Virtual scrolling state
             const scrollContainer = ref(null);
             const scrollTop = ref(0);
-            const itemHeight = 160; // Height per item including margin
-            const visibleCount = 4; // Show 4 items at once
-            const buffer = 2; // Extra items to render above/below
+            const itemHeight = 160;
+            const visibleCount = 4; // Can be higher now with shared context
+            const buffer = 2;
             const renderedStart = ref(0);
             const renderedEnd = ref(visibleCount + buffer);
 
@@ -72,7 +79,6 @@ export function createPreviewGallery() {
             const totalItems = computed(() => allItems.value.length);
             const totalHeight = computed(() => totalItems.value * itemHeight);
 
-            // Only render items in current viewport + buffer
             const renderedItems = computed(() => {
                 const start = renderedStart.value;
                 const end = Math.min(renderedEnd.value, allItems.value.length);
@@ -94,7 +100,7 @@ export function createPreviewGallery() {
             function getLoadingText(absoluteIndex) {
                 if (currentlyLoading.value === absoluteIndex) {
                     return 'Rendering...';
-                } else if (currentlyLoading.value > absoluteIndex) {
+                } else if (loadedCanvases.value[absoluteIndex] === true) {
                     return 'Ready';
                 } else {
                     return `Queue ${(absoluteIndex % visibleCount) + 1}`;
@@ -117,70 +123,62 @@ export function createPreviewGallery() {
                 emit('select', item.key);
             }
 
-            // Virtual scroll handler
             function onScroll(event) {
                 const target = event.target;
                 scrollTop.value = target.scrollTop;
 
-                // Calculate which items should be visible
                 const firstVisible = Math.floor(scrollTop.value / itemHeight);
                 const newStart = Math.max(0, firstVisible - buffer);
                 const newEnd = Math.min(allItems.value.length, firstVisible + visibleCount + buffer * 2);
 
-                // Only update if range actually changed
                 if (newStart !== renderedStart.value || newEnd !== renderedEnd.value) {
                     console.log(`[GALLERY] Virtual scroll update: ${newStart} to ${newEnd}`);
 
-                    // Dispose old previews that are going out of view
                     disposeOutOfRangePreviews(newStart, newEnd);
 
                     renderedStart.value = newStart;
                     renderedEnd.value = newEnd;
                 }
-
-                // Infinite scroll - load more when near bottom
-                const threshold = 200; // pixels from bottom
-                if (target.scrollHeight - (target.scrollTop + target.clientHeight) < threshold) {
-                    console.log('[GALLERY] Near bottom - could trigger load more here');
-                    // Your load more logic would go here
-                }
             }
 
-            // Dispose previews that are no longer in rendered range
             function disposeOutOfRangePreviews(newStart, newEnd) {
+                const keysToDispose = [];
+
                 Object.keys(previewInstances.value).forEach(key => {
                     const absoluteIndex = parseInt(key);
                     if (absoluteIndex < newStart || absoluteIndex >= newEnd) {
-                        try {
-                            previewInstances.value[key].dispose();
-                            delete previewInstances.value[key];
-                            delete loadedCanvases.value[key];
-                            console.log(`[GALLERY] Disposed preview ${key} (out of range)`);
-                        } catch (e) {
-                            console.warn(`[GALLERY] Error disposing preview ${key}:`, e);
-                        }
+                        keysToDispose.push(key);
+                    }
+                });
+
+                console.log(`[GALLERY] 🗑️  Disposing ${keysToDispose.length} out-of-range previews`);
+
+                keysToDispose.forEach(key => {
+                    const preview = previewInstances.value[key];
+
+                    if (disposeGalleryPreview(preview)) {
+                        delete previewInstances.value[key];
+                        delete loadedCanvases.value[key];
                     }
                 });
             }
 
-            // Dispose all current previews
             function disposeAllPreviews() {
-                Object.values(previewInstances.value).forEach(preview => {
-                    try {
-                        preview.dispose();
-                    } catch (e) {
-                        console.warn('[GALLERY] Error disposing preview:', e);
-                    }
-                });
+                console.log('[GALLERY] 🧹 Disposing all gallery previews (shared context)');
+
+                disposeAllGalleryPreviews();
+
                 previewInstances.value = {};
                 loadedCanvases.value = {};
                 currentlyLoading.value = -1;
+
+                const webglStatus = getWebGLStatus();
+                console.log('[GALLERY] 📊 WebGL Status after disposal:', webglStatus);
             }
 
-            // Render single 3D preview
             async function render3DPreview(item, canvasElement, absoluteIndex) {
                 try {
-                    console.log(`[GALLERY] [${absoluteIndex}] Rendering preview for: ${getFullName(item)}`);
+                    console.log(`[GALLERY] [${absoluteIndex}] Rendering preview (shared context)`);
                     currentlyLoading.value = absoluteIndex;
 
                     if (!item.file && !item.getFileUrl) {
@@ -189,18 +187,15 @@ export function createPreviewGallery() {
 
                     const fileUrl = typeof item.getFileUrl === 'function' ? item.getFileUrl() : item.file;
 
-                    // Use shared preview creation function
-                    const preview = createPreviewInstance(canvasElement, item, true); // true = gallery mode
+                    // Create gallery preview using shared context
+                    const preview = createPreviewInstance(canvasElement, item, true);
                     previewInstances.value[absoluteIndex] = preview;
 
-                    // Use shared G-code loading function
                     const gcodeStream = await loadGCodeFromServer(fileUrl);
-
-                    // Use shared rendering function
                     await renderGCodePreview(preview, gcodeStream, 100);
 
                     loadedCanvases.value[absoluteIndex] = true;
-                    console.log(`[GALLERY] [${absoluteIndex}] ✅ Preview rendered for: ${getFullName(item)}`);
+                    console.log(`[GALLERY] [${absoluteIndex}] ✅ Shared context preview rendered`);
 
                 } catch (error) {
                     console.error(`[GALLERY] [${absoluteIndex}] Error:`, error);
@@ -220,15 +215,13 @@ export function createPreviewGallery() {
                 }
             }
 
-            // Load visible previews sequentially
             async function loadVisiblePreviews(items) {
-                console.log(`[GALLERY] Loading ${items.length} visible previews`);
+                console.log(`[GALLERY] Loading ${items.length} visible previews (shared context)`);
 
                 for (let renderedIndex = 0; renderedIndex < items.length; renderedIndex++) {
                     const item = items[renderedIndex];
                     const absoluteIndex = getAbsoluteIndex(renderedIndex);
 
-                    // Skip if already loaded
                     if (loadedCanvases.value[absoluteIndex]) continue;
 
                     await nextTick();
@@ -242,35 +235,35 @@ export function createPreviewGallery() {
                     }
 
                     await render3DPreview(item, canvas, absoluteIndex);
-                    await new Promise(resolve => setTimeout(resolve, 800)); // Delay between renders
+                    await new Promise(resolve => setTimeout(resolve, 200)); // Faster with shared context
                 }
 
                 currentlyLoading.value = -1;
-                console.log(`[GALLERY] ✅ All visible previews loaded`);
+                console.log(`[GALLERY] ✅ All visible previews loaded (shared context)`);
             }
 
-            // Load previews when rendered items change
             watch(renderedItems, async (newItems) => {
                 if (!newItems.length) return;
                 await nextTick();
                 await loadVisiblePreviews(newItems);
             });
 
-            // Reset when modal opens/closes
             watch(() => props.visible, (visible) => {
                 if (visible) {
-                    // Reset to top when opening
+                    console.log('[GALLERY] 🎨 Opening gallery (shared WebGL context)');
+
                     renderedStart.value = 0;
                     renderedEnd.value = visibleCount + buffer;
                     scrollTop.value = 0;
+
                     nextTick(() => {
                         if (scrollContainer.value) {
                             scrollContainer.value.scrollTop = 0;
                         }
                     });
                 } else {
+                    console.log('[GALLERY] 🚪 Closing gallery (shared context preserved for reuse)');
                     disposeAllPreviews();
-                    console.log('[GALLERY] Modal closed, all previews disposed');
                 }
             });
 
