@@ -212,13 +212,28 @@ export const app = (window.app = createApp({
         selectedPreset.value = selectedParam;
         return true;
       } else if (selectedParam) {
-        console.warn(`[APP] Selected item ${selectedParam} not found in presets, clearing URL param`);
-        setQueryParam('selectedItem', null);
+        console.warn(`[APP] Selected item ${selectedParam} not found in presets, will try to load more`);
+        // Don't clear URL param immediately - we'll try to find it
+        return selectedParam;
       }
       return false;
     };
 
-    // **FIXED**: Wait for presets to load, then handle URL/default selection
+    // **NEW**: Enhanced loadMorePresets to handle specific item search
+    const loadMorePresetsUntilFound = async (targetItem, maxAttempts = 5) => {
+      let attempts = 0;
+
+      while (attempts < maxAttempts && !presets.value[targetItem] && hasMorePresets.value) {
+        attempts++;
+        console.log(`[APP] Loading more presets (attempt ${attempts}) to find: ${targetItem}`);
+        await loadMorePresets();
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      return presets.value[targetItem] !== undefined;
+    };
+
+    // **FIXED**: Enhanced initializeSelection to handle missing items
     const initializeSelection = async () => {
       // Wait for presets to be loaded
       if (Object.keys(presets.value).length <= Object.keys(localPresets).length) {
@@ -234,15 +249,43 @@ export const app = (window.app = createApp({
         });
       }
 
-      // Now check URL parameter first
-      const loadedFromUrl = loadSelectedItemFromUrl();
+      // **NEW**: Check URL parameter and handle missing items
+      const selectedParam = getQueryParam('selectedItem');
+      if (selectedParam) {
+        if (presets.value[selectedParam]) {
+          // Item exists in loaded presets
+          console.log(`[APP] ✅ Found URL selection in loaded presets: ${selectedParam}`);
+          selectedItem.value = selectedParam;
+          selectedPreset.value = selectedParam;
+          hasInitialized.value = true;
+          return selectedParam;
+        } else {
+          // **NEW**: Item not in current presets - try to load more or wait
+          console.log(`[APP] ⚠️ URL selection '${selectedParam}' not found in current presets, attempting to load more...`);
 
-      if (loadedFromUrl) {
-        console.log('[APP] ✅ Loaded selection from URL, skipping default');
-        // selectedPreset is already set by loadSelectedItemFromUrl
-        hasInitialized.value = true;
-        return selectedPreset.value;
+          // Try loading more presets to find the item
+          const found = await loadMorePresetsUntilFound(selectedParam, 3);
+
+          // Check again after loading attempts
+          if (found && presets.value[selectedParam]) {
+            console.log(`[APP] ✅ Found URL selection after loading more presets: ${selectedParam}`);
+            selectedItem.value = selectedParam;
+            selectedPreset.value = selectedParam;
+            hasInitialized.value = true;
+            return selectedParam;
+          } else {
+            // **NEW**: Still not found - preserve URL param but load default for now
+            console.warn(`[APP] ⚠️ URL selection '${selectedParam}' not found after loading attempts`);
+            console.log(`[APP] Preserving URL parameter but loading default preset for now`);
+            // Don't clear the URL parameter - keep it for potential future loads
+            selectedItem.value = selectedParam; // Keep URL selection in state
+            selectedPreset.value = defaultPreset; // But load default for display
+            hasInitialized.value = true;
+            return defaultPreset;
+          }
+        }
       } else {
+        // No URL parameter - use default
         console.log(`[APP] No URL selection found, using default: ${defaultPreset}`);
         selectedItem.value = defaultPreset;
         selectedPreset.value = defaultPreset;
@@ -376,10 +419,20 @@ export const app = (window.app = createApp({
       showGallery.value = false;
     };
 
-    // Gallery handler with URL sync
-    const selectPresetFromGallery = (presetName) => {
+    // **UPDATED**: Enhanced selectPresetFromGallery to handle missing items
+    const selectPresetFromGallery = async (presetName) => {
       console.log(`[APP] Gallery selected preset: ${presetName}`);
-      // showGallery.value = false;
+
+      // Check if preset exists, if not try to load it
+      if (!presets.value[presetName]) {
+        console.log(`[APP] Preset '${presetName}' not in current list, trying to load more...`);
+        const found = await loadMorePresetsUntilFound(presetName);
+
+        if (!found) {
+          console.error(`[APP] Could not find preset '${presetName}' after loading more presets`);
+          return; // Don't proceed if we can't find the preset
+        }
+      }
 
       selectedItem.value = presetName;
       selectPreset(presetName);

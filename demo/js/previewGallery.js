@@ -1,4 +1,4 @@
-// PreviewGallery.js - FIXED VERSION
+// PreviewGallery.js - COMPLETE FIXED VERSION
 import { ref, watch, computed, nextTick, getCurrentInstance, onMounted } from 'vue';
 import { loadGCodeFromServer, createPreviewInstance, renderGCodePreview } from './gcode-utils.js';
 
@@ -39,14 +39,26 @@ export function createPreviewGallery() {
               </div>
             </div>
           </div>
+          
+          <!-- **NEW**: Load More Button -->
+          <div class="gallery-actions" v-if="hasMorePresets && !isLoading">
+            <button @click="$emit('load-more')" class="gallery-load-more">
+              Load More Items
+            </button>
+          </div>
+          <div v-if="isLoading" class="gallery-loading-more">
+            Loading more presets...
+          </div>
         </div>
       </div>
     `,
         props: {
             visible: Boolean,
             dynamicPresets: Object,
+            hasMorePresets: Boolean,  // **NEW**
+            isLoading: Boolean,       // **NEW**
         },
-        emits: ['close', 'select'],
+        emits: ['close', 'select', 'load-more'], // **UPDATED**
         setup(props, { emit }) {
             const instance = getCurrentInstance();
             const loadedCanvases = ref({});
@@ -101,31 +113,62 @@ export function createPreviewGallery() {
                 window.history.replaceState({}, '', url);
             }
 
-            // **FIXED**: Load selected item from URL without closing modal
+            // **UPDATED**: Enhanced loadSelectedItemFromUrl with better fallback handling
             function loadSelectedItemFromUrl() {
                 const selectedParam = getQueryParam('selectedItem');
-                if (selectedParam && allItems.value.length > 0) {
-                    const foundItem = allItems.value.find(item => item.key === selectedParam);
-                    if (foundItem) {
-                        console.log(`[GALLERY] Loading selected item from URL: ${selectedParam}`);
-                        selectedItemId.value = selectedParam;
+                if (selectedParam) {
+                    if (allItems.value.length > 0) {
+                        const foundItem = allItems.value.find(item => item.key === selectedParam);
+                        if (foundItem) {
+                            console.log(`[GALLERY] ✅ Loading selected item from URL: ${selectedParam}`);
+                            selectedItemId.value = selectedParam;
 
-                        // **FIXED**: Set initialization flag and emit without closing
-                        isInitializing.value = true;
-                        emit('select', selectedParam);
-                        // Reset flag after a short delay
-                        setTimeout(() => {
-                            isInitializing.value = false;
-                        }, 100);
+                            isInitializing.value = true;
+                            emit('select', selectedParam);
+                            setTimeout(() => {
+                                isInitializing.value = false;
+                            }, 100);
 
-                        return true;
+                            return true;
+                        } else {
+                            // **NEW**: Item not found in current list - don't clear URL, just log
+                            console.warn(`[GALLERY] ⚠️ Selected item '${selectedParam}' not found in current ${allItems.value.length} items`);
+                            console.log('[GALLERY] Available items:', allItems.value.map(item => item.key).slice(0, 5), '...');
+
+                            // **NEW**: Try to emit the selection anyway - let parent handle the loading
+                            selectedItemId.value = selectedParam;
+                            isInitializing.value = true;
+                            emit('select', selectedParam);
+                            setTimeout(() => {
+                                isInitializing.value = false;
+                            }, 100);
+
+                            return true; // Return true to indicate we tried
+                        }
                     } else {
-                        console.warn(`[GALLERY] Selected item ${selectedParam} not found in presets`);
-                        setQueryParam('selectedItem', null);
+                        console.log(`[GALLERY] No items loaded yet, will retry when items are available`);
+                        return false;
                     }
                 }
                 return false;
             }
+
+            // **NEW**: Add a method to retry URL loading when more items become available
+            function retryUrlLoadingIfNeeded() {
+                const selectedParam = getQueryParam('selectedItem');
+                if (selectedParam && !selectedItemId.value && allItems.value.length > 0) {
+                    console.log(`[GALLERY] Retrying URL loading for: ${selectedParam}`);
+                    loadSelectedItemFromUrl();
+                }
+            }
+
+            // **UPDATED**: Watch allItems changes and retry URL loading
+            watch(allItems, (newItems) => {
+                if (newItems.length > 0) {
+                    // Retry URL loading if we haven't successfully loaded yet
+                    retryUrlLoadingIfNeeded();
+                }
+            }, { immediate: true });
 
             // Watch for changes in dynamicPresets and load URL param
             watch(() => props.dynamicPresets, (newPresets) => {
@@ -321,12 +364,15 @@ export function createPreviewGallery() {
                 await loadVisiblePreviews(newItems);
             });
 
+            // **NEW**: Initialize gallery state when mounted
             onMounted(() => {
+                // Check URL params immediately on mount if modal is visible
                 if (props.visible && allItems.value.length > 0) {
                     loadSelectedItemFromUrl();
                 }
             });
 
+            // **UPDATED**: Watch visibility with proper cleanup
             watch(() => props.visible, (visible) => {
                 if (visible) {
                     renderedStart.value = 0;

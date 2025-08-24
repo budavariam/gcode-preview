@@ -264,11 +264,14 @@
       ></canvas>
 
       <!-- Gallery Modal -->
-      <preview-gallery
-          :visible="showGallery"
-          :dynamic-presets="dynamicPresets"
-          @close="closeGallery"
-          @select="selectPresetFromGallery"
+      <preview-gallery 
+        :visible="showGallery" 
+        :dynamic-presets="dynamicPresets"
+        :has-more-presets="hasMorePresets"
+        :is-loading="isLoading"
+        @close="closeGallery"
+        @select="selectPresetFromGallery"
+        @load-more="loadMorePresets"
       />
     </div>
   </div>
