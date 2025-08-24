@@ -286,7 +286,7 @@ export const app = (window.app = createApp({
       }
     };
 
-    // FIXED: G-code loading with proper stream handling
+    // UPDATED: G-code loading with stream-based build volume detection
     const loadGCodeFromServer = async (filename) => {
       const currentToken = switchToken;
 
@@ -296,45 +296,68 @@ export const app = (window.app = createApp({
 
         if (currentToken !== switchToken || response.status !== 200) return;
 
-        // NEW: Read the full response text first to parse build volume
-        const gcodeText = await response.text();
-
-        // NEW: Try to detect build volume from comments
-        const detectedVolume = parseBuildVolumeFromGCode(gcodeText);
-        if (detectedVolume) {
-          detectedBuildVolume.value = {
-            x: detectedVolume.x,
-            y: detectedVolume.y,
-            z: detectedVolume.z
-          };
-          console.log(`[BUILD-VOLUME] Detected from G-code: ${detectedVolume.x}x${detectedVolume.y}x${detectedVolume.z}mm`, detectedVolume.bounds);
-        } else {
-          detectedBuildVolume.value = null;
-          console.log('[BUILD-VOLUME] No bounding box comments found in G-code');
-        }
-
         if (currentToken !== switchToken || !preview) return;
 
-        // FIXED: Create proper stream from processed text
-        const processedGcode = gcodeText.replace(/^N\d+\s+/gm, "");
+        // NEW: Track bounding box parsing in stream
+        const bounds = {};
+        let boundingBoxDetected = false;
 
-        // Create a proper readable stream
-        const gcodeStream = new ReadableStream({
-          start(controller) {
-            // Split into chunks to avoid memory issues with large files
-            const chunkSize = 64 * 1024; // 64KB chunks
-            for (let i = 0; i < processedGcode.length; i += chunkSize) {
-              controller.enqueue(processedGcode.slice(i, i + chunkSize));
+        const gcodeStream = response.body
+          .pipeThrough(new TextDecoderStream())
+          .pipeThrough(new TransformStream({
+            transform(chunk, controller) {
+              // Remove line numbers
+              let processedChunk = chunk.replace(/^N\d+\s+/gm, "");
+
+              // NEW: Parse bounding box comments on the fly
+              const lines = processedChunk.split('\n');
+              for (const line of lines) {
+                const trimmed = line.trim();
+                const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
+                if (boundMatch) {
+                  const [, minMax, axis, value] = boundMatch;
+                  const key = `${minMax.toLowerCase()}${axis.toLowerCase()}`;
+                  bounds[key] = parseFloat(value);
+
+                  // Check if we have enough bounds to calculate build volume
+                  if (!boundingBoxDetected &&
+                    bounds.min_x !== undefined && bounds.max_x !== undefined &&
+                    bounds.min_y !== undefined && bounds.max_y !== undefined) {
+
+                    const x = Math.abs(bounds.max_x - bounds.min_x);
+                    const y = Math.abs(bounds.max_y - bounds.min_y);
+                    let z = 15; // Default height
+                    if (bounds.min_z !== undefined && bounds.max_z !== undefined) {
+                      z = Math.abs(bounds.max_z - bounds.min_z);
+                    }
+
+                    const padding = 1.05;
+                    detectedBuildVolume.value = {
+                      x: Math.ceil(x * padding),
+                      y: Math.ceil(y * padding),
+                      z: Math.ceil(z * padding)
+                    };
+
+                    boundingBoxDetected = true;
+                    console.log(`[BUILD-VOLUME] Detected in stream: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm`, bounds);
+                  }
+                }
+              }
+
+              controller.enqueue(processedChunk);
             }
-            controller.close();
-          }
-        });
+          }));
 
         if (currentToken !== switchToken || !preview) return;
 
         await preview.processGCode(gcodeStream, { render: false });
 
         if (currentToken === switchToken) {
+          if (!boundingBoxDetected) {
+            detectedBuildVolume.value = null;
+            console.log('[BUILD-VOLUME] No bounding box comments found in G-code stream');
+          }
+
           await updateUI();
           setTimeout(() => simpleRender(), 100);
         }
@@ -342,6 +365,7 @@ export const app = (window.app = createApp({
         console.error('[LOAD] Error:', error);
       }
     };
+
 
     // FIXED: Simple preset selection - no canvas recreation
     const selectPreset = async (presetName) => {
