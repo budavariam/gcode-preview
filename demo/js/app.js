@@ -1097,7 +1097,9 @@ export const app = (window.app = createApp({
         }
 
         const currentSettings = {
+          emulate3DPlotting: true,
           startLayer: 1,
+          plotMinZ: 0,
           enableStartLayer: false,
           maxLayer: countLayers || 1000,
           endLayer: countLayers || 0,
@@ -1143,7 +1145,6 @@ export const app = (window.app = createApp({
 
         const bounds = {};
         let boundingBoxDetected = false;
-
         const gcodeStream = response.body
           .pipeThrough(new TextDecoderStream())
           .pipeThrough(new TransformStream({
@@ -1151,8 +1152,13 @@ export const app = (window.app = createApp({
               let processedChunk = chunk.replace(/^N\d+\s+/gm, "");
 
               const lines = processedChunk.split('\n');
+              const outputLines = [];
+
               for (const line of lines) {
                 const trimmed = line.trim();
+                let modifiedLine = trimmed;
+
+                // Existing build volume detection code
                 const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
                 if (boundMatch) {
                   const [, minMax, axis, value] = boundMatch;
@@ -1181,9 +1187,16 @@ export const app = (window.app = createApp({
                     console.log(`[BUILD-VOLUME] Detected in stream: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm`, bounds);
                   }
                 }
+
+                // **SIMPLE**: Add constant extrusion to G1 commands that don't have E
+                if (settings.value.emulate3DPlotting && /^G1/.test(trimmed) && !/E/.test(trimmed)) {
+                  modifiedLine = `${trimmed} E1.0`;
+                }
+
+                outputLines.push(modifiedLine);
               }
 
-              controller.enqueue(processedChunk);
+              controller.enqueue(outputLines.join('\n'));
             }
           }));
 
