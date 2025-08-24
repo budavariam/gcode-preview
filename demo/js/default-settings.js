@@ -1,5 +1,5 @@
 export const defaultSettings = {
-  emulate3DPlotting: true,
+  emulate3DPlotting: false,
   plotMinZ: 0,
   renderTubes: true,
   buildVolume: {

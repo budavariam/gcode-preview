@@ -96,6 +96,7 @@ export function createPreviewInstance(canvas, presetOptions, isGallery = false) 
         extrusionColor: presetOptions.extrusionColor || ['#95dfa1'],
         renderExtrusion: presetOptions.renderExtrusion !== false,
         renderTravel: presetOptions.renderTravel !== false,
+        emulate3DPlotting: presetOptions.emulate3DPlotting !== false,
         travelColor: presetOptions.travelColor || '#00FFFF',
         lineWidth: isGallery ? 1 : (presetOptions.lineWidth || 1),
         renderTubes: !isGallery && (presetOptions.renderTubes !== false),

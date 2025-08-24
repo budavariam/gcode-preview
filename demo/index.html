@@ -124,6 +124,10 @@
                   <input type="checkbox" id="travel"  v-model="settings.renderTravel" />
                 </div>
                 <div class="controls">
+                  <label for="emulate3DPlotting">Emulate 3d extrusion</label>
+                  <input type="checkbox" id="emulate3DPlotting"  v-model="settings.emulate3DPlotting" />
+                </div>
+                <div class="controls">
                   <label :class="{'has-text-grey' : !settings.renderTravel}" for="travel-color">Travel color</label>
                   <input type="color" id="travel-color" v-model="settings.travelColor" :disabled="!settings.renderTravel" />
                 </div>

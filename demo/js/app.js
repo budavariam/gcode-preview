@@ -15,6 +15,13 @@ let switchToken = 0;
 let presetSwitchTimeout = null;
 let renderInProgress = false;
 
+// Global storage for G-code versions (add this at the top of your file, outside any function)
+let gcodeVersions = {
+  original: '',
+  emulated3D: '',
+  currentMode: null
+};
+
 // Function to parse build volume from G-code comments
 const parseBuildVolumeFromGCode = (gcodeText) => {
   const lines = gcodeText.split('\n');
@@ -924,6 +931,7 @@ export const app = (window.app = createApp({
           extrusionColor: ['#95dfa1'],
           renderExtrusion: true,
           renderTravel: true,
+          emulate3DPlotting: false,
           travelColor: '#00FFFF'
         };
 
@@ -1057,7 +1065,7 @@ export const app = (window.app = createApp({
       try {
         const {
           parser, countLayers, extrusionColor, topLayerColor, lastSegmentColor,
-          buildVolume, backgroundColor, singleLayerMode, renderTravel, travelColor,
+          buildVolume, backgroundColor, singleLayerMode, renderTravel, emulate3DPlotting, travelColor,
           renderExtrusion, lineWidth, renderTubes, extrusionWidth, boundingBoxColor
         } = preview;
 
@@ -1097,7 +1105,7 @@ export const app = (window.app = createApp({
         }
 
         const currentSettings = {
-          emulate3DPlotting: true,
+          // emulate3DPlotting: !!emulate3DPlotting,
           startLayer: 1,
           plotMinZ: 0,
           enableStartLayer: false,
@@ -1145,6 +1153,11 @@ export const app = (window.app = createApp({
 
         const bounds = {};
         let boundingBoxDetected = false;
+
+        // Reset stored G-code versions
+        gcodeVersions.original = '';
+        gcodeVersions.emulated3D = '';
+
         const gcodeStream = response.body
           .pipeThrough(new TextDecoderStream())
           .pipeThrough(new TransformStream({
@@ -1152,11 +1165,11 @@ export const app = (window.app = createApp({
               let processedChunk = chunk.replace(/^N\d+\s+/gm, "");
 
               const lines = processedChunk.split('\n');
-              const outputLines = [];
+              const originalLines = [];
+              const emulated3DLines = [];
 
               for (const line of lines) {
                 const trimmed = line.trim();
-                let modifiedLine = trimmed;
 
                 // Existing build volume detection code
                 const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
@@ -1188,14 +1201,23 @@ export const app = (window.app = createApp({
                   }
                 }
 
-                // **SIMPLE**: Add constant extrusion to G1 commands that don't have E
-                if (settings.value.emulate3DPlotting && /^G1/.test(trimmed) && !/E/.test(trimmed)) {
-                  modifiedLine = `${trimmed} E1.0`;
-                }
+                // Store original line
+                originalLines.push(trimmed);
 
-                outputLines.push(modifiedLine);
+                // Create emulated 3D version
+                let emulated3DLine = trimmed;
+                if (/^G1/.test(trimmed) && !/E/.test(trimmed)) {
+                  emulated3DLine = `${trimmed} E1.0`;
+                }
+                emulated3DLines.push(emulated3DLine);
               }
 
+              // Accumulate both versions
+              gcodeVersions.original += originalLines.join('\n') + '\n';
+              gcodeVersions.emulated3D += emulated3DLines.join('\n') + '\n';
+
+              // Output based on current setting
+              const outputLines = settings.value.emulate3DPlotting ? emulated3DLines : originalLines;
               controller.enqueue(outputLines.join('\n'));
             }
           }));
@@ -1205,6 +1227,8 @@ export const app = (window.app = createApp({
         await preview.processGCode(gcodeStream, { render: false });
 
         if (currentToken === switchToken) {
+          gcodeVersions.currentMode = settings.value.emulate3DPlotting;
+
           if (!boundingBoxDetected) {
             detectedBuildVolume.value = null;
             console.log('[BUILD-VOLUME] No bounding box comments found in G-code stream');
@@ -1292,6 +1316,76 @@ export const app = (window.app = createApp({
 
     watch(enableDevMode, applyDevMode);
 
+    // Watch for emulate3DPlotting changes and switch modes instantly
+    watch(() => settings.value.emulate3DPlotting, async (newValue) => {
+      if (!preview || gcodeVersions.currentMode === newValue || !gcodeVersions.original) return;
+
+      console.log(`[EMULATION] Switching to ${newValue ? '3D emulated' : 'original'} mode`);
+
+      const gcodeToUse = newValue ? gcodeVersions.emulated3D : gcodeVersions.original;
+
+      if (gcodeToUse) {
+        try {
+          // **KEY FIX**: Force disposal and recreation of preview
+          const currentCanvas = document.querySelector('canvas.preview');
+          if (!currentCanvas) return;
+
+          // Dispose current preview completely
+          if (preview) {
+            try {
+              preview.dispose();
+            } catch (error) {
+              console.error('[EMULATION] Disposal error:', error);
+            }
+          }
+
+          // Clear any GUI elements
+          document.querySelectorAll('.lil-gui, .stats').forEach(el => el.remove());
+
+          // Small delay to ensure cleanup
+          await new Promise(resolve => setTimeout(resolve, 50));
+
+          // Recreate preview with fresh state
+          const preset = presets.value[selectedPreset.value];
+          const options = {
+            ...defaultSettings,
+            ...preset,
+            canvas: currentCanvas,
+            droppable: true,
+            backgroundColor: initialBackgroundColor,
+            emulate3DPlotting: newValue // Set the mode explicitly
+          };
+
+          window['_preview'] = preview = new GCodePreview.init(options);
+
+          // Create stream from stored G-code
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(gcodeToUse);
+              controller.close();
+            }
+          });
+
+          gcodeVersions.currentMode = newValue;
+
+          await preview.processGCode(stream, { render: false });
+
+          // Setup enhanced controls after recreation
+          setupOrbitControls();
+          applyDevMode(enableDevMode.value);
+
+          await updateUI();
+          simpleRender();
+
+          console.log(`[EMULATION] Successfully switched to ${newValue ? '3D emulated' : 'original'} mode`);
+        } catch (error) {
+          console.error('[EMULATION] Error switching modes:', error);
+        }
+      }
+    });
+
+
+
     onMounted(async () => {
       try {
         console.log('[APP] 🚀 Starting app initialization...');
@@ -1361,6 +1455,7 @@ export const app = (window.app = createApp({
           try {
             Object.assign(preview, {
               renderTravel: settings.value.renderTravel,
+              emulate3DPlotting: settings.value.emulate3DPlotting,
               travelColor: settings.value.travelColor,
               lineWidth: +settings.value.lineWidth,
               renderExtrusion: settings.value.renderExtrusion,
@@ -1369,7 +1464,7 @@ export const app = (window.app = createApp({
               topLayerColor: settings.value.highlightTopLayer ? settings.value.topLayerColor : undefined,
               lastSegmentColor: settings.value.highlightLastSegment ? settings.value.lastSegmentColor : undefined
             });
-            setTimeout(() => simpleRender(), 100);
+            simpleRender();
           } catch (error) {
             console.error('[WATCH-EFFECT] Render settings error:', error);
           }
