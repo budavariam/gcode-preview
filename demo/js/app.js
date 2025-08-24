@@ -14,6 +14,52 @@ let switchToken = 0;
 let presetSwitchTimeout = null;
 let renderInProgress = false;
 
+// NEW: Function to parse build volume from G-code comments
+const parseBuildVolumeFromGCode = (gcodeText) => {
+  const lines = gcodeText.split('\n');
+  const bounds = {};
+
+  // Look for bounding box comments
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Match patterns like "; min_x = 2.361" or ";min_x = 2.361"
+    const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
+    if (boundMatch) {
+      const [, minMax, axis, value] = boundMatch;
+      const key = `${minMax.toLowerCase()}${axis.toLowerCase()}`;
+      bounds[key] = parseFloat(value);
+    }
+  }
+
+  // Calculate dimensions if we have all required bounds
+  if (bounds.min_x !== undefined && bounds.max_x !== undefined &&
+    bounds.min_y !== undefined && bounds.max_y !== undefined) {
+
+    const x = Math.abs(bounds.max_x - bounds.min_x);
+    const y = Math.abs(bounds.max_y - bounds.min_y);
+
+    // Z dimension (height) - try to get from bounds, otherwise use a default
+    let z = 15; // Default height
+    if (bounds.min_z !== undefined && bounds.max_z !== undefined) {
+      z = Math.abs(bounds.max_z - bounds.min_z);
+    }
+
+    // Add some padding to the dimensions (5-10%)
+    const padding = 1.05;
+
+    return {
+      x: Math.ceil(x * padding),
+      y: Math.ceil(y * padding),
+      z: Math.ceil(z * padding),
+      detected: true,
+      bounds: bounds
+    };
+  }
+
+  return null;
+};
+
 // FIXED: Bulletproof color handling
 const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
   if (!colorObj) return defaultColor;
@@ -94,6 +140,8 @@ export const app = (window.app = createApp({
     const enableDevMode = ref(false);
     const drawBoundingBox = ref(false);
     const presets = ref(localPresets);
+    // NEW: Track detected build volume info
+    const detectedBuildVolume = ref(null);
 
     // Fetch presets from API
     const fetchPresets = async () => {
@@ -156,7 +204,7 @@ export const app = (window.app = createApp({
       updateUI();
     };
 
-    // FIXED: Robust UI update with proper color handling
+    // FIXED: UI update with build volume detection support
     const updateUI = async () => {
       if (!preview) return;
 
@@ -194,6 +242,16 @@ export const app = (window.app = createApp({
           validColors.push('#95dfa1');
         }
 
+        // FIXED: Use detected build volume properly
+        let finalBuildVolume = buildVolume;
+        if (detectedBuildVolume.value) {
+          finalBuildVolume = detectedBuildVolume.value;
+          // Update the preview's build volume if it exists
+          if (preview.buildVolume) {
+            Object.assign(preview.buildVolume, detectedBuildVolume.value);
+          }
+        }
+
         const currentSettings = {
           startLayer: 1,
           enableStartLayer: false,
@@ -212,8 +270,8 @@ export const app = (window.app = createApp({
           highlightTopLayer: !!topLayerColor,
           lastSegmentColor: safeGetHexString(lastSegmentColor, '#FFFF00'),
           highlightLastSegment: !!lastSegmentColor,
-          buildVolume: buildVolume,
-          drawBuildVolume: !!buildVolume,
+          buildVolume: finalBuildVolume || { x: 100, y: 100, z: 10 },
+          drawBuildVolume: !!finalBuildVolume,
           backgroundColor: safeGetHexString(backgroundColor, initialBackgroundColor),
           boundingBoxColor: safeGetHexString(boundingBoxColor, '#FF00FF')
         };
@@ -222,13 +280,13 @@ export const app = (window.app = createApp({
         preview.endLayer = countLayers || 0;
         applyDevMode(enableDevMode.value);
 
-        console.log(`[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}`);
+        console.log(`[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}, build volume: ${JSON.stringify(finalBuildVolume)}`);
       } catch (error) {
         console.error('[UI] Error:', error);
       }
     };
 
-    // G-code loading
+    // FIXED: G-code loading with proper stream handling
     const loadGCodeFromServer = async (filename) => {
       const currentToken = switchToken;
 
@@ -238,13 +296,39 @@ export const app = (window.app = createApp({
 
         if (currentToken !== switchToken || response.status !== 200) return;
 
-        const gcodeStream = response.body
-          .pipeThrough(new TextDecoderStream())
-          .pipeThrough(new TransformStream({
-            transform(chunk, controller) {
-              controller.enqueue(chunk.replace(/^N\d+\s+/gm, ""));
+        // NEW: Read the full response text first to parse build volume
+        const gcodeText = await response.text();
+
+        // NEW: Try to detect build volume from comments
+        const detectedVolume = parseBuildVolumeFromGCode(gcodeText);
+        if (detectedVolume) {
+          detectedBuildVolume.value = {
+            x: detectedVolume.x,
+            y: detectedVolume.y,
+            z: detectedVolume.z
+          };
+          console.log(`[BUILD-VOLUME] Detected from G-code: ${detectedVolume.x}x${detectedVolume.y}x${detectedVolume.z}mm`, detectedVolume.bounds);
+        } else {
+          detectedBuildVolume.value = null;
+          console.log('[BUILD-VOLUME] No bounding box comments found in G-code');
+        }
+
+        if (currentToken !== switchToken || !preview) return;
+
+        // FIXED: Create proper stream from processed text
+        const processedGcode = gcodeText.replace(/^N\d+\s+/gm, "");
+
+        // Create a proper readable stream
+        const gcodeStream = new ReadableStream({
+          start(controller) {
+            // Split into chunks to avoid memory issues with large files
+            const chunkSize = 64 * 1024; // 64KB chunks
+            for (let i = 0; i < processedGcode.length; i += chunkSize) {
+              controller.enqueue(processedGcode.slice(i, i + chunkSize));
             }
-          }));
+            controller.close();
+          }
+        });
 
         if (currentToken !== switchToken || !preview) return;
 
@@ -272,6 +356,9 @@ export const app = (window.app = createApp({
 
         model.value = preset.model;
         if (myToken !== switchToken) return;
+
+        // NEW: Reset detected build volume when switching presets
+        detectedBuildVolume.value = null;
 
         await disposePreview();
         if (myToken !== switchToken) return;
@@ -409,6 +496,7 @@ export const app = (window.app = createApp({
     return {
       presets, activeTab, selectedPreset, thumbnail, layerCount, fileSize,
       model, dragging, settings, loadProgressive, enableDevMode, drawBoundingBox,
+      detectedBuildVolume, // NEW: Expose detected build volume
       selectTab, addColor, removeColor, update, resetUI: updateUI,
       loadGCodeFromServer, selectPreset
     };
