@@ -15,6 +15,7 @@ let preview = null;
 // Enhanced race protection — serialize preset switching
 let switchToken = 0;
 let presetSwitchTimeout = null;
+let renderInProgress = false;
 
 // Helper function to safely get hex color string
 const safeGetHexString = (colorObj, defaultColor = '#000000') => {
@@ -31,9 +32,59 @@ const safeGetHexString = (colorObj, defaultColor = '#000000') => {
   }
 };
 
+// Centralized render function with coordination
+const coordinatedRender = async (source = 'unknown') => {
+  if (renderInProgress) {
+    console.log(`[RENDER] Skipping render from ${source} - render already in progress`);
+    return;
+  }
+
+  if (!preview) {
+    console.error(`[RENDER] Preview is null, cannot render (source: ${source})`);
+    return;
+  }
+
+  renderInProgress = true;
+  console.log(`[RENDER] Starting coordinated render from ${source} (progressive: ${loadProgressive.value})`);
+
+  try {
+    console.log(`[RENDER] Preview state - layers: ${preview.countLayers}, job exists: ${!!preview.job}`);
+
+    // Always use standard rendering for better compatibility
+    console.log('[RENDER] Using standard rendering');
+    preview.render();
+
+    // Additional render verification
+    console.log('[RENDER] Standard render completed, checking canvas state');
+    const canvas = document.querySelector('canvas.preview');
+    if (canvas) {
+      console.log(`[RENDER] Canvas dimensions: ${canvas.width}x${canvas.height}`);
+      console.log(`[RENDER] Canvas style: ${canvas.style.display}`);
+
+      // Force canvas to be visible
+      if (canvas.style.display === 'none') {
+        console.log('[RENDER] Canvas was hidden, making visible');
+        canvas.style.display = 'block';
+      }
+    } else {
+      console.error('[RENDER] Canvas not found after render!');
+    }
+
+  } catch (error) {
+    console.error(`[RENDER] Error during render from ${source}:`, error);
+  } finally {
+    renderInProgress = false;
+    console.log(`[RENDER] Render from ${source} completed`);
+  }
+};
+
 // Centralized and robustly dispose preview + observers + UI with async cleanup
 const disposePreview = async () => {
   console.log('[DISPOSE] Starting preview disposal');
+
+  // Stop any ongoing renders
+  renderInProgress = false;
+
   try {
     if (observer) {
       console.log('[DISPOSE] Disconnecting observer');
@@ -310,12 +361,6 @@ export const app = (window.app = createApp({
 
         console.log('[UI] UI update completed successfully');
 
-        // Force a render after UI update to ensure visibility
-        setTimeout(() => {
-          console.log('[UI] Triggering post-UI render');
-          render();
-        }, 100);
-
       } catch (error) {
         console.error('[UI] Error updating UI:', error);
       }
@@ -388,9 +433,9 @@ export const app = (window.app = createApp({
           console.log('[LOAD] Updating UI after successful G-code load');
           await updateUI();
 
-          // Ensure render happens after all setup is complete
+          // Single coordinated render after all setup is complete
           console.log('[LOAD] Performing final render after G-code load');
-          await render();
+          await coordinatedRender('loadGCode');
 
           console.log('[LOAD] G-code load and UI update completed successfully');
         } else {
@@ -400,39 +445,6 @@ export const app = (window.app = createApp({
       } catch (error) {
         console.error('[LOAD] Error processing G-code:', error);
         console.error('[LOAD] Error stack:', error.stack);
-      }
-    };
-
-    const render = async () => {
-      console.log(`[RENDER] Starting render (progressive: ${loadProgressive.value})`);
-      try {
-        if (!preview) {
-          console.error('[RENDER] Preview is null, cannot render');
-          return;
-        }
-
-        console.log(`[RENDER] Preview state - layers: ${preview.countLayers}, job exists: ${!!preview.job}`);
-
-        if (loadProgressive.value && preview.job && preview.job.layers !== null && preview.countLayers > 0) {
-          console.log('[RENDER] Using animated rendering');
-          await preview.renderAnimated();
-        } else {
-          console.log('[RENDER] Using standard rendering');
-          preview.render();
-        }
-
-        // Additional render verification
-        console.log('[RENDER] Render completed, checking canvas state');
-        const canvas = document.querySelector('canvas.preview');
-        if (canvas) {
-          console.log(`[RENDER] Canvas dimensions: ${canvas.width}x${canvas.height}`);
-          console.log(`[RENDER] Canvas style: ${canvas.style.display}`);
-        } else {
-          console.error('[RENDER] Canvas not found after render!');
-        }
-
-      } catch (error) {
-        console.error('[RENDER] Error during render:', error);
       }
     };
 
@@ -516,6 +528,8 @@ export const app = (window.app = createApp({
           console.log('[OBSERVER] Handling resize');
           if (preview) {
             preview.resize();
+            // Trigger render after resize
+            setTimeout(() => coordinatedRender('resize'), 50);
           }
         });
         observer.observe(canvas);
@@ -624,10 +638,8 @@ export const app = (window.app = createApp({
             preview.extrusionWidth = +settings.value.extrusionWidth;
             preview.topLayerColor = settings.value.highlightTopLayer ? settings.value.topLayerColor : undefined;
             preview.lastSegmentColor = settings.value.highlightLastSegment ? settings.value.lastSegmentColor : undefined;
-            // run render after settings have been applied
-            setTimeout(() => {
-              render();
-            }, 50); // Slightly longer delay to ensure all settings are applied
+            // Coordinated render after settings update
+            setTimeout(() => coordinatedRender('watchEffect-renderSettings'), 100);
           } catch (error) {
             console.error('[WATCH-EFFECT] Error updating render settings:', error);
           }
