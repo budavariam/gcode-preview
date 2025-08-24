@@ -79,6 +79,8 @@ const coordinatedRender = async (source = 'unknown') => {
 };
 
 // Centralized and robustly dispose preview + observers + UI with async cleanup
+// Enhanced disposal with WebGL context cleanup
+// Enhanced disposal without canvas recreation
 const disposePreview = async () => {
   console.log('[DISPOSE] Starting preview disposal');
 
@@ -99,6 +101,42 @@ const disposePreview = async () => {
   if (preview) {
     try {
       console.log('[DISPOSE] Disposing preview object');
+
+      // Deep cleanup of Three.js objects
+      if (preview.scene) {
+        console.log('[DISPOSE] Deep cleaning Three.js scene');
+
+        // Dispose of all geometries
+        preview.scene.traverse((object) => {
+          if (object.geometry) {
+            object.geometry.dispose();
+          }
+          if (object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(material => material.dispose());
+            } else {
+              object.material.dispose();
+            }
+          }
+          if (object.texture) {
+            object.texture.dispose();
+          }
+        });
+
+        // Clear the scene
+        while (preview.scene.children.length > 0) {
+          preview.scene.remove(preview.scene.children[0]);
+        }
+      }
+
+      // Renderer cleanup
+      if (preview.renderer) {
+        console.log('[DISPOSE] Cleaning renderer render lists');
+        preview.renderer.renderLists.dispose();
+        preview.renderer.dispose();
+      }
+
+      // Standard disposal
       preview.dispose();
       console.log('[DISPOSE] Preview disposed successfully');
     } catch (e) {
@@ -107,14 +145,30 @@ const disposePreview = async () => {
     preview = null;
   }
 
+  // Clear canvas without recreation
+  const canvas = document.querySelector('canvas.preview');
+  if (canvas) {
+    console.log('[DISPOSE] Clearing canvas context');
+    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    if (gl) {
+      // Clear all WebGL state
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+      gl.finish();
+    }
+  }
+
   console.log('[DISPOSE] Removing GUI elements');
   const guiElements = document.querySelectorAll('.lil-gui, .stats');
   console.log(`[DISPOSE] Found ${guiElements.length} GUI elements to remove`);
   guiElements.forEach((el) => el.remove());
 
-  // Give the cleanup time to complete
+  // Explicit garbage collection hint
+  if (window.gc) {
+    window.gc();
+  }
+
   console.log('[DISPOSE] Waiting for cleanup to complete');
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await new Promise(resolve => setTimeout(resolve, 100));
   console.log('[DISPOSE] Disposal complete');
 };
 
@@ -454,7 +508,7 @@ export const app = (window.app = createApp({
       console.log(`[PRESET] ========== Starting preset switch to: ${presetName} (token: ${myToken}) ==========`);
 
       try {
-        const canvas = document.querySelector('canvas.preview');
+        let canvas = document.querySelector('canvas.preview');
         if (!canvas) {
           console.error('[PRESET] Canvas element not found');
           return;
@@ -482,7 +536,28 @@ export const app = (window.app = createApp({
         await disposePreview();
         console.log('[PRESET] Previous preview disposed');
 
-        // Check token after disposal
+        // Recreate canvas element to ensure fresh WebGL context
+        console.log('[PRESET] Recreating canvas element');
+        const canvasParent = canvas.parentNode;
+        const canvasRect = canvas.getBoundingClientRect();
+        const canvasStyle = window.getComputedStyle(canvas);
+
+        const newCanvas = document.createElement('canvas');
+        newCanvas.className = canvas.className;
+        newCanvas.width = canvas.width;
+        newCanvas.height = canvas.height;
+
+        // Copy important style properties
+        newCanvas.style.width = canvasStyle.width;
+        newCanvas.style.height = canvasStyle.height;
+        newCanvas.style.display = canvasStyle.display;
+        newCanvas.style.position = canvasStyle.position;
+
+        canvasParent.replaceChild(newCanvas, canvas);
+        canvas = newCanvas;
+        console.log(`[PRESET] Canvas recreated: ${canvas.width}x${canvas.height}`);
+
+        // Check token after disposal and canvas recreation
         if (myToken !== switchToken) {
           console.log(`[PRESET] Preset switch cancelled - superseded after disposal (${myToken} vs ${switchToken})`);
           return;
@@ -492,7 +567,7 @@ export const app = (window.app = createApp({
         const options = {
           ...defaultSettings,
           ...preset,
-          canvas,
+          canvas, // Use the new canvas
           droppable: true,
           backgroundColor: initialBackgroundColor
         };
