@@ -1,9 +1,9 @@
-import { createApp, ref, watch, onMounted, watchEffect, readonly } from 'vue';
+import { createApp, ref, watch, onMounted, watchEffect, readonly, computed } from 'vue';
 import { presets as localPresets } from './presets.js';
 import * as GCodePreview from 'gcode-preview';
 import { defaultSettings } from './default-settings.js';
 import { parseIntOrDefault } from './utils.js';
-
+import { createPreviewGallery } from './previewGallery.js';
 
 const defaultPreset = 'benchy';
 const preferDarkMode = window.matchMedia('(prefers-color-scheme: dark)');
@@ -15,17 +15,13 @@ let switchToken = 0;
 let presetSwitchTimeout = null;
 let renderInProgress = false;
 
-
-// NEW: Function to parse build volume from G-code comments
+// Function to parse build volume from G-code comments
 const parseBuildVolumeFromGCode = (gcodeText) => {
   const lines = gcodeText.split('\n');
   const bounds = {};
 
-  // Look for bounding box comments
   for (const line of lines) {
     const trimmed = line.trim();
-
-    // Match patterns like "; min_x = 2.361" or ";min_x = 2.361"
     const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
     if (boundMatch) {
       const [, minMax, axis, value] = boundMatch;
@@ -34,22 +30,17 @@ const parseBuildVolumeFromGCode = (gcodeText) => {
     }
   }
 
-  // Calculate dimensions if we have all required bounds
   if (bounds.min_x !== undefined && bounds.max_x !== undefined &&
     bounds.min_y !== undefined && bounds.max_y !== undefined) {
 
     const x = Math.abs(bounds.max_x - bounds.min_x);
     const y = Math.abs(bounds.max_y - bounds.min_y);
-
-    // Z dimension (height) - try to get from bounds, otherwise use a default
-    let z = 15; // Default height
+    let z = 15;
     if (bounds.min_z !== undefined && bounds.max_z !== undefined) {
       z = Math.abs(bounds.max_z - bounds.min_z);
     }
 
-    // Add some padding to the dimensions (5-10%)
     const padding = 1.05;
-
     return {
       x: Math.ceil(x * padding),
       y: Math.ceil(y * padding),
@@ -58,24 +49,18 @@ const parseBuildVolumeFromGCode = (gcodeText) => {
       bounds: bounds
     };
   }
-
   return null;
 };
 
-
-// FIXED: Bulletproof color handling
+// Bulletproof color handling
 const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
   if (!colorObj) return defaultColor;
-
-  // Handle string colors
   if (typeof colorObj === 'string') {
     if (colorObj === '' || colorObj === 'undefined' || colorObj === 'null') {
       return defaultColor;
     }
     return colorObj.startsWith('#') ? colorObj : `#${colorObj}`;
   }
-
-  // Handle Three.js color objects
   if (colorObj && typeof colorObj.getHexString === 'function') {
     try {
       const hex = colorObj.getHexString();
@@ -84,18 +69,14 @@ const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
       return defaultColor;
     }
   }
-
   return defaultColor;
 };
-
 
 // Simple render without coordination complexity
 const simpleRender = async () => {
   if (!preview || renderInProgress) return;
-
   renderInProgress = true;
   try {
-    // Don't skip zero layer files - let the library handle it
     console.log(`[RENDER] Rendering - layers: ${preview.countLayers || 'unknown'}`);
     preview.render();
   } catch (error) {
@@ -105,14 +86,12 @@ const simpleRender = async () => {
   }
 };
 
-
 // Basic disposal - no complex cleanup
 const disposePreview = async () => {
   if (observer) {
     observer.disconnect();
     observer = null;
   }
-
   if (preview) {
     try {
       preview.dispose();
@@ -121,11 +100,9 @@ const disposePreview = async () => {
     }
     preview = null;
   }
-
   document.querySelectorAll('.lil-gui, .stats').forEach(el => el.remove());
   await new Promise(resolve => setTimeout(resolve, 50));
 };
-
 
 // Fresh URL helper
 const getFreshUrl = (url) => {
@@ -133,8 +110,10 @@ const getFreshUrl = (url) => {
   return `${url}${sep}_t=${Date.now()}&_r=${Math.random().toString(36).slice(2)}`;
 };
 
-
 export const app = (window.app = createApp({
+  components: {
+    PreviewGallery: createPreviewGallery()
+  },
   setup() {
     const activeTab = ref('layers');
     const selectedPreset = ref(defaultPreset);
@@ -147,18 +126,35 @@ export const app = (window.app = createApp({
     const enableDevMode = ref(false);
     const drawBoundingBox = ref(false);
     const presets = ref(localPresets);
-    // NEW: Track detected build volume info
     const detectedBuildVolume = ref(null);
 
-    // NEW: Add pagination state
+    // Gallery state
+    const showGallery = ref(false);
+
+    // Add pagination state
     const currentSkip = ref(0);
     const itemsPerLoad = ref(100);
     const isLoading = ref(false);
     const hasMorePresets = ref(true);
 
-    // UPDATED: Enhanced fetchPresets with pagination support
+    // Dynamic presets: filter only non-static ones
+    const dynamicPresets = computed(() => {
+      const result = {};
+      for (const [k, p] of Object.entries(presets.value)) {
+        if (!(k in localPresets)) {
+          result[k] = {
+            ...p,
+            // Set top-down camera for gallery previews
+            initialCameraPosition: [50, 50, 150]
+          };
+        }
+      }
+      return result;
+    });
+
+    // Enhanced fetchPresets with pagination support
     const fetchPresets = async (loadMore = false) => {
-      if (isLoading.value) return; // Prevent multiple simultaneous requests
+      if (isLoading.value) return;
 
       isLoading.value = true;
 
@@ -181,7 +177,6 @@ export const app = (window.app = createApp({
         const apiPresets = await response.json();
         console.log(`[API] Received ${apiPresets.length} presets`);
 
-        // Check if we have more items to load
         hasMorePresets.value = apiPresets.length === limit;
 
         const defaultsForDynamic = {
@@ -203,11 +198,12 @@ export const app = (window.app = createApp({
             ...defaultsForDynamic,
             ...(item.settings || {}),
             buildVolume: { x: 100, y: 100, z: 10 },
+            // Set perpendicular camera position from above
+            initialCameraPosition: [50, 50, 150],
           };
         });
 
         if (loadMore) {
-          // Append new presets to existing ones
           const merged = { ...presets.value };
           let addedCount = 0;
 
@@ -222,7 +218,6 @@ export const app = (window.app = createApp({
           currentSkip.value += limit;
           console.log(`[API] Added ${addedCount} new presets (total skip: ${currentSkip.value})`);
         } else {
-          // Initial load - merge with local presets
           const merged = { ...presets.value };
           let addedCount = 0;
 
@@ -240,28 +235,33 @@ export const app = (window.app = createApp({
 
       } catch (error) {
         console.error('[API] Error fetching presets:', error);
-        hasMorePresets.value = false; // Stop trying if there's an error
+        hasMorePresets.value = false;
       } finally {
         isLoading.value = false;
       }
     };
 
-    // NEW: Load more presets function
+    // Load more presets function
     const loadMorePresets = async () => {
       if (!hasMorePresets.value || isLoading.value) {
         console.log('[API] No more presets to load or already loading');
         return;
       }
-
       await fetchPresets(true);
     };
 
-    // NEW: Reset presets function (useful for debugging)
+    // Reset presets function
     const resetPresets = async () => {
       currentSkip.value = 0;
       hasMorePresets.value = true;
       presets.value = { ...localPresets };
       await fetchPresets(false);
+    };
+
+    // Gallery handler
+    const selectPresetFromGallery = (presetName) => {
+      showGallery.value = false;
+      selectPreset(presetName);
     };
 
     // Watch preset changes
@@ -279,7 +279,7 @@ export const app = (window.app = createApp({
       updateUI();
     };
 
-    // FIXED: UI update with build volume detection support
+    // UI update with build volume detection support
     const updateUI = async () => {
       if (!preview) return;
 
@@ -308,20 +308,18 @@ export const app = (window.app = createApp({
 
         layerCount.value = countLayers || 0;
 
-        // FIXED: Safe color processing - handle all edge cases
+        // Safe color processing
         const colors = Array.isArray(extrusionColor) ? extrusionColor : [extrusionColor];
         const validColors = colors.map(c => safeGetHexString(c, '#95dfa1'));
 
-        // Ensure we always have at least one valid color
         if (validColors.length === 0 || validColors.every(c => !c || c === '')) {
           validColors.push('#95dfa1');
         }
 
-        // FIXED: Use detected build volume properly
+        // Use detected build volume properly
         let finalBuildVolume = buildVolume;
         if (detectedBuildVolume.value) {
           finalBuildVolume = detectedBuildVolume.value;
-          // Update the preview's build volume if it exists
           if (preview.buildVolume) {
             Object.assign(preview.buildVolume, detectedBuildVolume.value);
           }
@@ -361,7 +359,7 @@ export const app = (window.app = createApp({
       }
     };
 
-    // UPDATED: G-code loading with stream-based build volume detection
+    // G-code loading with stream-based build volume detection
     const loadGCodeFromServer = async (filename) => {
       const currentToken = switchToken;
 
@@ -370,10 +368,8 @@ export const app = (window.app = createApp({
         const response = await fetch(finalUrl, { cache: 'no-store' });
 
         if (currentToken !== switchToken || response.status !== 200) return;
-
         if (currentToken !== switchToken || !preview) return;
 
-        // NEW: Track bounding box parsing in stream
         const bounds = {};
         let boundingBoxDetected = false;
 
@@ -381,10 +377,8 @@ export const app = (window.app = createApp({
           .pipeThrough(new TextDecoderStream())
           .pipeThrough(new TransformStream({
             transform(chunk, controller) {
-              // Remove line numbers
               let processedChunk = chunk.replace(/^N\d+\s+/gm, "");
 
-              // NEW: Parse bounding box comments on the fly
               const lines = processedChunk.split('\n');
               for (const line of lines) {
                 const trimmed = line.trim();
@@ -394,14 +388,13 @@ export const app = (window.app = createApp({
                   const key = `${minMax.toLowerCase()}${axis.toLowerCase()}`;
                   bounds[key] = parseFloat(value);
 
-                  // Check if we have enough bounds to calculate build volume
                   if (!boundingBoxDetected &&
                     bounds.min_x !== undefined && bounds.max_x !== undefined &&
                     bounds.min_y !== undefined && bounds.max_y !== undefined) {
 
                     const x = Math.abs(bounds.max_x - bounds.min_x);
                     const y = Math.abs(bounds.max_y - bounds.min_y);
-                    let z = 15; // Default height
+                    let z = 15;
                     if (bounds.min_z !== undefined && bounds.max_z !== undefined) {
                       z = Math.abs(bounds.max_z - bounds.min_z);
                     }
@@ -441,7 +434,7 @@ export const app = (window.app = createApp({
       }
     };
 
-    // FIXED: Simple preset selection - no canvas recreation
+    // Simple preset selection
     const selectPreset = async (presetName) => {
       const myToken = ++switchToken;
 
@@ -455,13 +448,11 @@ export const app = (window.app = createApp({
         model.value = preset.model;
         if (myToken !== switchToken) return;
 
-        // NEW: Reset detected build volume when switching presets
         detectedBuildVolume.value = null;
 
         await disposePreview();
         if (myToken !== switchToken) return;
 
-        // Initialize with existing canvas - no recreation
         const options = {
           ...defaultSettings,
           ...preset,
@@ -477,7 +468,6 @@ export const app = (window.app = createApp({
           return;
         }
 
-        // Setup observer
         if (observer) observer.disconnect();
         observer = new ResizeObserver(() => {
           if (myToken !== switchToken) return;
@@ -595,16 +585,21 @@ export const app = (window.app = createApp({
       // Original returns
       presets, activeTab, selectedPreset, thumbnail, layerCount, fileSize,
       model, dragging, settings, loadProgressive, enableDevMode, drawBoundingBox,
-      detectedBuildVolume, // NEW: Expose detected build volume
+      detectedBuildVolume,
       selectTab, addColor, removeColor, update, resetUI: updateUI,
       loadGCodeFromServer, selectPreset,
 
-      // NEW: Add pagination-related returns
+      // Add pagination-related returns
       loadMorePresets,
       resetPresets,
       isLoading,
       hasMorePresets,
-      currentSkip: readonly(currentSkip), // Make read-only for template
+      currentSkip: readonly(currentSkip),
+
+      // Gallery functionality
+      showGallery,
+      dynamicPresets,
+      selectPresetFromGallery,
     };
   }
 }).mount('#app'));
