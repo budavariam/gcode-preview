@@ -297,6 +297,7 @@ export const app = (window.app = createApp({
     };
 
     // **NEW**: Enhanced zoom toward mouse cursor
+    // Enhanced zoom toward mouse cursor with better stability
     const zoomTowardMouse = (deltaZ) => {
       if (!preview || !preview.camera || typeof window.THREE === 'undefined') {
         // Fallback to regular zoom
@@ -317,12 +318,12 @@ export const app = (window.app = createApp({
 
         const rect = canvas.getBoundingClientRect();
 
-        // Convert mouse position to normalized device coordinates (-1 to +1)
+        // Convert mouse position to normalized device coordinates
         const mouse = new window.THREE.Vector2();
         mouse.x = ((mousePosition.value.x - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((mousePosition.value.y - rect.top) / rect.height) * 2 + 1;
 
-        // Create raycaster to find 3D point under mouse
+        // Create raycaster
         const raycaster = new window.THREE.Raycaster();
         raycaster.setFromCamera(mouse, preview.camera);
 
@@ -331,43 +332,69 @@ export const app = (window.app = createApp({
 
         let targetPoint;
         if (intersects.length > 0) {
-          // Use intersection point
           targetPoint = intersects[0].point.clone();
-          console.log(`[ZOOM] Found intersection at [${targetPoint.x.toFixed(2)}, ${targetPoint.y.toFixed(2)}, ${targetPoint.z.toFixed(2)}]`);
         } else {
-          // Use controls target or scene center as fallback
-          if (preview.controls && preview.controls.target) {
-            targetPoint = preview.controls.target.clone();
-          } else {
-            targetPoint = new window.THREE.Vector3(0, 0, 0);
-          }
-          console.log(`[ZOOM] No intersection, using fallback point [${targetPoint.x.toFixed(2)}, ${targetPoint.y.toFixed(2)}, ${targetPoint.z.toFixed(2)}]`);
+          // Use a point on the ray at a reasonable distance
+          const rayDirection = raycaster.ray.direction.clone();
+          const currentDistance = preview.controls && preview.controls.target
+            ? preview.camera.position.distanceTo(preview.controls.target)
+            : 100; // Default distance
+
+          targetPoint = preview.camera.position.clone()
+            .add(rayDirection.multiplyScalar(currentDistance));
         }
 
-        // Calculate zoom direction (toward or away from target point)
+        // Calculate zoom movement with fixed step size instead of percentage
         const cameraToTarget = new window.THREE.Vector3();
         cameraToTarget.subVectors(targetPoint, preview.camera.position);
-        const distance = cameraToTarget.length();
+        const currentDistance = cameraToTarget.length();
 
-        // Normalize direction
-        cameraToTarget.normalize();
+        // **KEY FIX**: Use fixed step size with minimum distance constraint
+        const baseStepSize = cameraControls.value.zoomSpeed; // e.g., 5
+        const minDistance = 1.0; // Minimum distance to prevent camera from going through target
+        const maxDistance = 1000; // Maximum reasonable distance
 
-        // Calculate movement distance (percentage of current distance)
-        const zoomFactor = 0.1; // 10% of current distance
-        const moveDistance = distance * zoomFactor;
-
-        // Move camera toward (negative deltaZ) or away (positive deltaZ) from target
-        const moveVector = cameraToTarget.multiplyScalar(deltaZ < 0 ? moveDistance : -moveDistance);
-        preview.camera.position.add(moveVector);
-
-        // Update controls if available
-        if (preview.controls) {
-          preview.controls.update();
+        // Calculate the actual movement
+        let moveDistance;
+        if (deltaZ < 0) { // Zooming in
+          // Ensure we don't get closer than minDistance
+          moveDistance = Math.min(baseStepSize, Math.max(0, currentDistance - minDistance));
+        } else { // Zooming out
+          // Use fixed step size for zooming out
+          moveDistance = baseStepSize;
         }
 
-        simpleRender();
+        // Prevent movement if we're too close
+        if (currentDistance <= minDistance && deltaZ < 0) {
+          console.log('[ZOOM] Already at minimum distance, ignoring zoom in');
+          return;
+        }
 
-        console.log(`[ZOOM] Zoomed ${deltaZ < 0 ? 'toward' : 'away from'} point [${targetPoint.x.toFixed(2)}, ${targetPoint.y.toFixed(2)}, ${targetPoint.z.toFixed(2)}]`);
+        // Prevent movement if we're too far
+        if (currentDistance >= maxDistance && deltaZ > 0) {
+          console.log('[ZOOM] Already at maximum distance, ignoring zoom out');
+          return;
+        }
+
+        // Normalize direction and apply movement
+        if (currentDistance > 0.001) { // Avoid division by zero
+          cameraToTarget.normalize();
+          const moveVector = cameraToTarget.multiplyScalar(deltaZ < 0 ? moveDistance : -moveDistance);
+          preview.camera.position.add(moveVector);
+
+          // Update controls target to the intersection point for better orbit behavior
+          if (preview.controls && preview.controls.target && intersects.length > 0) {
+            preview.controls.target.copy(targetPoint);
+          }
+
+          if (preview.controls) {
+            preview.controls.update();
+          }
+
+          simpleRender();
+
+          console.log(`[ZOOM] ${deltaZ < 0 ? 'In' : 'Out'} - Distance: ${currentDistance.toFixed(2)} -> ${preview.camera.position.distanceTo(targetPoint).toFixed(2)}`);
+        }
 
       } catch (error) {
         console.error('[ZOOM] Mouse zoom error:', error);
@@ -377,6 +404,7 @@ export const app = (window.app = createApp({
         simpleRender();
       }
     };
+
 
     // **NEW**: Enhanced camera movement with mouse-aware zooming
     const moveCameraBy = (deltaX, deltaY, deltaZ, useMousePosition = false) => {
