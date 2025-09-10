@@ -15,14 +15,22 @@ let switchToken = 0;
 let presetSwitchTimeout = null;
 let renderInProgress = false;
 
-// Global storage for G-code versions (add this at the top of your file, outside any function)
 let gcodeVersions = {
   original: '',
   emulated3D: '',
   currentMode: null
 };
 
-// Function to parse build volume from G-code comments
+let multicolorData = {
+  toolColors: new Map(),
+  currentTool: 0,
+  detectedTools: new Set(),
+  defaultColors: [
+    '#95dfa1', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE',
+    '#FF9F40', '#FF6384', '#36A2EB', '#4BC0C0', '#9966FF', '#FF9F40', '#C9CBCF', '#4BC0C0'
+  ]
+};
+
 const parseBuildVolumeFromGCode = (gcodeText) => {
   const lines = gcodeText.split('\n');
   const bounds = {};
@@ -59,7 +67,60 @@ const parseBuildVolumeFromGCode = (gcodeText) => {
   return null;
 };
 
-// Bulletproof color handling
+const convertColorName = (colorName) => {
+  if (!colorName || typeof colorName !== 'string') return null;
+
+  const colorMap = {
+    'red': '#FF0000', 'blue': '#0000FF', 'green': '#00FF00', 'yellow': '#FFFF00',
+    'magenta': '#FF00FF', 'cyan': '#00FFFF', 'black': '#000000', 'white': '#FFFFFF',
+    'orange': '#FFA500', 'purple': '#800080', 'pink': '#FFC0CB', 'brown': '#A52A2A',
+    'gray': '#808080', 'grey': '#808080', 'lime': '#00FF00', 'navy': '#000080',
+    'teal': '#008080', 'silver': '#C0C0C0', 'maroon': '#800000', 'olive': '#808000'
+  };
+
+  return colorMap[colorName.toLowerCase()] || null;
+};
+
+const parseColorFromComment = (line) => {
+  if (!line || typeof line !== 'string') return null;
+
+  const colorCommentMatch1 = line.match(/;\s*Tool change for color:\s*(\w+)/i);
+  if (colorCommentMatch1) {
+    return convertColorName(colorCommentMatch1[1]);
+  }
+
+  const colorCommentMatch2 = line.match(/;\s*T?(?:ool\s+)?(\d+)\s*:\s*(\w+)/i);
+  if (colorCommentMatch2) {
+    return convertColorName(colorCommentMatch2[2]);
+  }
+
+  const colorCommentMatch3 = line.match(/;\s*COLOR\s*[=:]\s*(\w+)/i);
+  if (colorCommentMatch3) {
+    return convertColorName(colorCommentMatch3[1]);
+  }
+
+  const hexCommentMatch = line.match(/;\s*T?(?:ool\s+)?\d*\s*[:#]([A-Fa-f0-9]{6})/);
+  if (hexCommentMatch) {
+    return `#${hexCommentMatch[1]}`;
+  }
+
+  return null;
+};
+
+const assignToolColor = (toolNumber) => {
+  if (!multicolorData.toolColors.has(toolNumber)) {
+    const colorIndex = Array.from(multicolorData.detectedTools).indexOf(toolNumber);
+    const finalIndex = colorIndex >= 0 ? colorIndex : multicolorData.detectedTools.size;
+    const assignedColor = multicolorData.defaultColors[finalIndex % multicolorData.defaultColors.length];
+
+    multicolorData.toolColors.set(toolNumber, assignedColor);
+    console.log(`[MULTICOLOR] Tool T${toolNumber} assigned color ${assignedColor}`);
+    return assignedColor;
+  }
+
+  return multicolorData.toolColors.get(toolNumber);
+};
+
 const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
   if (!colorObj) return defaultColor;
   if (typeof colorObj === 'string') {
@@ -79,7 +140,6 @@ const safeGetHexString = (colorObj, defaultColor = '#95dfa1') => {
   return defaultColor;
 };
 
-// Simple render without coordination complexity
 const simpleRender = async () => {
   if (!preview || renderInProgress) return;
   renderInProgress = true;
@@ -93,7 +153,6 @@ const simpleRender = async () => {
   }
 };
 
-// Basic disposal - no complex cleanup
 const disposePreview = async () => {
   if (observer) {
     observer.disconnect();
@@ -111,13 +170,11 @@ const disposePreview = async () => {
   await new Promise(resolve => setTimeout(resolve, 50));
 };
 
-// Fresh URL helper
 const getFreshUrl = (url) => {
   const sep = url.includes('?') ? '&' : '?';
   return `${url}${sep}_t=${Date.now()}&_r=${Math.random().toString(36).slice(2)}`;
 };
 
-// URL Query Parameter Management
 const getQueryParam = (key) => {
   const urlParams = new URLSearchParams(window.location.search);
   return urlParams.get(key);
@@ -151,40 +208,36 @@ export const app = (window.app = createApp({
     const presets = ref(localPresets);
     const detectedBuildVolume = ref(null);
 
-    // Gallery state
     const showGallery = ref(false);
-
-    // Selected item state for URL sync
     const selectedItem = ref(null);
-
-    // **CRITICAL**: Flag to prevent default preset selection
     const hasInitialized = ref(false);
 
-    // Add pagination state
     const currentSkip = ref(0);
     const itemsPerLoad = ref(100);
     const isLoading = ref(false);
     const hasMorePresets = ref(true);
 
-    // **NEW**: Keyboard navigation state
     const keyboardNavigation = ref({
       enabled: true,
       focusedElement: null,
       showHelpOverlay: false
     });
 
-    // **NEW**: Camera controls state
     const cameraControls = ref({
       moveSpeed: 10,
       rotateSpeed: 0.1,
       zoomSpeed: 5
     });
 
-    // **NEW**: Mouse tracking state for zoom-to-cursor
     const mousePosition = ref({ x: 0, y: 0 });
     const isMouseOverCanvas = ref(false);
 
-    // Dynamic presets: filter only non-static ones
+    const multicolorInfo = ref({
+      toolCount: 0,
+      colors: [],
+      isMulticolor: false
+    });
+
     const dynamicPresets = computed(() => {
       const result = {};
       for (const [k, p] of Object.entries(presets.value)) {
@@ -198,7 +251,6 @@ export const app = (window.app = createApp({
       return result;
     });
 
-    // **NEW**: Navigate through presets with debugging
     const navigatePresets = (direction) => {
       console.log(`[KEYBOARD] Navigating presets: ${direction}`);
       const presetKeys = Object.keys(presets.value);
@@ -223,7 +275,6 @@ export const app = (window.app = createApp({
       selectedPreset.value = newPreset;
     };
 
-    // **NEW**: Reset camera to initial position with debugging
     const resetCameraView = () => {
       console.log('[KEYBOARD] Resetting camera view');
       if (!preview || !preview.camera) {
@@ -238,12 +289,10 @@ export const app = (window.app = createApp({
           preview.camera.position.set(x, y, z);
           console.log(`[KEYBOARD] Set camera to preset position: [${x}, ${y}, ${z}]`);
         } else {
-          // Default camera position
           preview.camera.position.set(50, 50, 150);
           console.log('[KEYBOARD] Set camera to default position: [50, 50, 150]');
         }
 
-        // Reset controls target to center
         if (preview.controls && preview.controls.target) {
           preview.controls.target.set(0, 0, 0);
           preview.controls.update();
@@ -256,7 +305,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Fit model to screen with debugging
     const fitToScreen = () => {
       console.log('[KEYBOARD] Fitting to screen');
       if (!preview || !preview.camera || !preview.scene) {
@@ -265,7 +313,6 @@ export const app = (window.app = createApp({
       }
 
       try {
-        // Check if THREE is available
         if (typeof window.THREE === 'undefined') {
           console.error('[KEYBOARD] THREE.js not available on window object');
           return;
@@ -296,11 +343,8 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Enhanced zoom toward mouse cursor
-    // Enhanced zoom toward mouse cursor with better stability
     const zoomTowardMouse = (deltaZ) => {
       if (!preview || !preview.camera || typeof window.THREE === 'undefined') {
-        // Fallback to regular zoom
         preview.camera.position.z += deltaZ;
         if (preview.controls) preview.controls.update();
         simpleRender();
@@ -318,71 +362,58 @@ export const app = (window.app = createApp({
 
         const rect = canvas.getBoundingClientRect();
 
-        // Convert mouse position to normalized device coordinates
         const mouse = new window.THREE.Vector2();
         mouse.x = ((mousePosition.value.x - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((mousePosition.value.y - rect.top) / rect.height) * 2 + 1;
 
-        // Create raycaster
         const raycaster = new window.THREE.Raycaster();
         raycaster.setFromCamera(mouse, preview.camera);
 
-        // Try to intersect with scene objects
         const intersects = raycaster.intersectObjects(preview.scene.children, true);
 
         let targetPoint;
         if (intersects.length > 0) {
           targetPoint = intersects[0].point.clone();
         } else {
-          // Use a point on the ray at a reasonable distance
           const rayDirection = raycaster.ray.direction.clone();
           const currentDistance = preview.controls && preview.controls.target
             ? preview.camera.position.distanceTo(preview.controls.target)
-            : 100; // Default distance
+            : 100;
 
           targetPoint = preview.camera.position.clone()
             .add(rayDirection.multiplyScalar(currentDistance));
         }
 
-        // Calculate zoom movement with fixed step size instead of percentage
         const cameraToTarget = new window.THREE.Vector3();
         cameraToTarget.subVectors(targetPoint, preview.camera.position);
         const currentDistance = cameraToTarget.length();
 
-        // **KEY FIX**: Use fixed step size with minimum distance constraint
-        const baseStepSize = cameraControls.value.zoomSpeed; // e.g., 5
-        const minDistance = 1.0; // Minimum distance to prevent camera from going through target
-        const maxDistance = 1000; // Maximum reasonable distance
+        const baseStepSize = cameraControls.value.zoomSpeed;
+        const minDistance = 1.0;
+        const maxDistance = 1000;
 
-        // Calculate the actual movement
         let moveDistance;
-        if (deltaZ < 0) { // Zooming in
-          // Ensure we don't get closer than minDistance
+        if (deltaZ < 0) {
           moveDistance = Math.min(baseStepSize, Math.max(0, currentDistance - minDistance));
-        } else { // Zooming out
-          // Use fixed step size for zooming out
+        } else {
           moveDistance = baseStepSize;
         }
 
-        // Prevent movement if we're too close
         if (currentDistance <= minDistance && deltaZ < 0) {
           console.log('[ZOOM] Already at minimum distance, ignoring zoom in');
           return;
         }
 
-        // Prevent movement if we're too far
         if (currentDistance >= maxDistance && deltaZ > 0) {
           console.log('[ZOOM] Already at maximum distance, ignoring zoom out');
           return;
         }
 
-        // Normalize direction and apply movement
-        if (currentDistance > 0.001) { // Avoid division by zero
+        if (currentDistance > 0.001) {
           cameraToTarget.normalize();
           const moveVector = cameraToTarget.multiplyScalar(deltaZ < 0 ? moveDistance : -moveDistance);
           preview.camera.position.add(moveVector);
 
-          // Update controls target to the intersection point for better orbit behavior
           if (preview.controls && preview.controls.target && intersects.length > 0) {
             preview.controls.target.copy(targetPoint);
           }
@@ -398,15 +429,12 @@ export const app = (window.app = createApp({
 
       } catch (error) {
         console.error('[ZOOM] Mouse zoom error:', error);
-        // Fallback to regular zoom
         preview.camera.position.z += deltaZ;
         if (preview.controls) preview.controls.update();
         simpleRender();
       }
     };
 
-
-    // **NEW**: Enhanced camera movement with mouse-aware zooming
     const moveCameraBy = (deltaX, deltaY, deltaZ, useMousePosition = false) => {
       console.log(`[KEYBOARD] Moving camera by: [${deltaX}, ${deltaY}, ${deltaZ}], mouse-aware: ${useMousePosition}`);
       if (!preview || !preview.camera) {
@@ -416,10 +444,8 @@ export const app = (window.app = createApp({
 
       try {
         if (deltaZ !== 0 && useMousePosition && isMouseOverCanvas.value) {
-          // Zoom toward mouse cursor
           zoomTowardMouse(deltaZ);
         } else {
-          // Regular movement
           const oldPos = preview.camera.position.clone();
           preview.camera.position.x += deltaX;
           preview.camera.position.y += deltaY;
@@ -437,7 +463,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Layer navigation functions with debugging
     const changeLayer = (direction, type = 'end') => {
       const increment = direction === 'up' ? 1 : -1;
       console.log(`[KEYBOARD] Changing ${type} layer by ${increment}`);
@@ -460,7 +485,6 @@ export const app = (window.app = createApp({
       simpleRender();
     };
 
-    // **NEW**: Toggle functions with debugging
     const toggleSetting = (settingName, displayName) => {
       const oldValue = settings.value[settingName];
       settings.value[settingName] = !oldValue;
@@ -468,7 +492,6 @@ export const app = (window.app = createApp({
       simpleRender();
     };
 
-    // **NEW**: Mouse tracking for zoom-to-cursor functionality
     const handleMouseMove = (e) => {
       mousePosition.value = { x: e.clientX, y: e.clientY };
     };
@@ -483,7 +506,6 @@ export const app = (window.app = createApp({
       console.log('[MOUSE] Mouse left canvas');
     };
 
-    // **NEW**: Enhanced wheel zoom handler with zoom-to-cursor
     const handleWheel = (e) => {
       if (!isMouseOverCanvas.value || !keyboardNavigation.value.enabled) return;
       e.preventDefault();
@@ -493,26 +515,31 @@ export const app = (window.app = createApp({
       zoomTowardMouse(deltaZ);
     };
 
-    // **NEW**: Setup enhanced OrbitControls
     const setupOrbitControls = () => {
       if (!preview || !preview.controls) return;
 
       try {
         const controls = preview.controls;
 
-        // Enable zoom to cursor if supported
         if (controls.zoomToCursor !== undefined) {
           controls.zoomToCursor = true;
           console.log('[CONTROLS] Enabled zoomToCursor on OrbitControls');
         }
 
-        // Configure other control properties
+        if (controls.minDistance !== undefined) {
+          controls.minDistance = 1;
+        }
+
+        if (controls.maxDistance !== undefined) {
+          controls.maxDistance = 1000;
+        }
+
         if (controls.enableZoom !== undefined) {
           controls.enableZoom = true;
         }
 
         if (controls.zoomSpeed !== undefined) {
-          controls.zoomSpeed = 1.0;
+          controls.zoomSpeed = 0.5;
         }
 
         if (controls.panSpeed !== undefined) {
@@ -523,16 +550,19 @@ export const app = (window.app = createApp({
           controls.rotateSpeed = 1.0;
         }
 
-        console.log('[CONTROLS] OrbitControls configured for optimal zoom behavior');
+        if (controls.enableDamping !== undefined) {
+          controls.enableDamping = true;
+          controls.dampingFactor = 0.05;
+        }
+
+        console.log('[CONTROLS] Enhanced OrbitControls configured for optimal zoom behavior');
 
       } catch (error) {
-        console.error('[CONTROLS] Error setting up orbit controls:', error);
+        console.error('[CONTROLS] Error setting up enhanced orbit controls:', error);
       }
     };
 
-    // **NEW**: Keyboard shortcuts configuration with enhanced zoom
     const keyboardShortcuts = {
-      // Gallery navigation
       'g': () => {
         console.log('[KEYBOARD] Gallery toggle pressed');
         showGallery.value ? closeGallery() : openGallery();
@@ -546,21 +576,19 @@ export const app = (window.app = createApp({
         }
       },
 
-      // Tab navigation
       '1': () => {
         console.log('[KEYBOARD] Tab 1 pressed - layers');
         selectTab('layers');
       },
       '2': () => {
-        console.log('[KEYBOARD] Tab 2 pressed - visual');
-        selectTab('visual');
+        console.log('[KEYBOARD] Tab 2 pressed - travel');
+        selectTab('travel');
       },
       '3': () => {
-        console.log('[KEYBOARD] Tab 3 pressed - printer');
-        selectTab('printer');
+        console.log('[KEYBOARD] Tab 3 pressed - extrusion');
+        selectTab('extrusion');
       },
 
-      // Layer controls
       'ArrowUp': (e) => {
         e.preventDefault();
         console.log(`[KEYBOARD] Arrow Up pressed ${e.shiftKey ? 'with Shift' : ''}`);
@@ -598,7 +626,6 @@ export const app = (window.app = createApp({
         }
       },
 
-      // Preset navigation
       'p': () => {
         console.log('[KEYBOARD] P pressed - previous preset');
         navigatePresets('previous');
@@ -608,7 +635,6 @@ export const app = (window.app = createApp({
         navigatePresets('next');
       },
 
-      // View controls
       'r': () => {
         console.log('[KEYBOARD] R pressed - reset camera');
         resetCameraView();
@@ -618,7 +644,6 @@ export const app = (window.app = createApp({
         fitToScreen();
       },
 
-      // Camera movement (WASD + QE) with enhanced zoom
       'w': (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] W pressed - move up');
@@ -650,7 +675,6 @@ export const app = (window.app = createApp({
         moveCameraBy(0, 0, cameraControls.value.zoomSpeed, true);
       },
 
-      // Toggle features
       't': () => {
         console.log('[KEYBOARD] T pressed - toggle travel');
         toggleSetting('renderTravel', 'travel rendering');
@@ -668,7 +692,6 @@ export const app = (window.app = createApp({
         toggleSetting('singleLayerMode', 'single layer mode');
       },
 
-      // Layer enable/disable
       '[': () => {
         console.log('[KEYBOARD] [ pressed - toggle start layer');
         toggleSetting('enableStartLayer', 'start layer control');
@@ -678,7 +701,6 @@ export const app = (window.app = createApp({
         toggleSetting('enableEndLayer', 'end layer control');
       },
 
-      // Dev mode and help
       'F12': (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] F12 pressed - toggle dev mode');
@@ -693,7 +715,6 @@ export const app = (window.app = createApp({
         keyboardNavigation.value.showHelpOverlay = !keyboardNavigation.value.showHelpOverlay;
       },
 
-      // Page navigation for presets
       'PageUp': (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] PageUp pressed - skip 5 presets back');
@@ -709,7 +730,6 @@ export const app = (window.app = createApp({
         }
       },
 
-      // Quick layer jumps
       'End': (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] End pressed - jump to last layer');
@@ -734,7 +754,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Enhanced keyboard event handler
     const handleKeydown = (e) => {
       console.log(`[KEYBOARD DEBUG] Key pressed: "${e.key}", enabled: ${keyboardNavigation.value.enabled}, target: ${e.target.tagName}`);
 
@@ -743,7 +762,6 @@ export const app = (window.app = createApp({
         return;
       }
 
-      // Don't intercept if user is typing in an input
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
         console.log('[KEYBOARD DEBUG] Ignoring - user typing in input field');
         return;
@@ -763,13 +781,11 @@ export const app = (window.app = createApp({
       }
     };
 
-    // **NEW**: Toggle keyboard navigation
     const toggleKeyboardNavigation = () => {
       keyboardNavigation.value.enabled = !keyboardNavigation.value.enabled;
       console.log(`[KEYBOARD] Navigation ${keyboardNavigation.value.enabled ? 'enabled' : 'disabled'}`);
     };
 
-    // **DEBUG**: Manual test functions
     const testKeyboard = () => {
       console.log('[KEYBOARD TEST] Testing keyboard navigation');
       console.log('Current state:', keyboardNavigation.value);
@@ -794,6 +810,7 @@ export const app = (window.app = createApp({
         layerCount: layerCount.value,
         mouseOverCanvas: isMouseOverCanvas.value,
         mousePosition: mousePosition.value,
+        multicolor: multicolorInfo.value,
         settings: {
           enableStartLayer: settings.value.enableStartLayer,
           enableEndLayer: settings.value.enableEndLayer,
@@ -807,7 +824,6 @@ export const app = (window.app = createApp({
       });
     };
 
-    // Gallery URL Parameter Management
     const getGalleryQueryParam = () => {
       return getQueryParam('gallery') === 'true';
     };
@@ -820,7 +836,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // Initialize gallery state from URL
     const initializeGalleryFromUrl = () => {
       const shouldShowGallery = getGalleryQueryParam();
       if (shouldShowGallery !== showGallery.value) {
@@ -829,7 +844,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // Watch gallery state and update URL
     watch(showGallery, (newValue) => {
       if (hasInitialized.value) {
         console.log(`[APP] Gallery state changed: ${newValue}, updating URL`);
@@ -837,7 +851,6 @@ export const app = (window.app = createApp({
       }
     });
 
-    // Load selected item from URL with proper timing
     const loadSelectedItemFromUrl = () => {
       const selectedParam = getQueryParam('selectedItem');
       if (selectedParam && presets.value[selectedParam]) {
@@ -852,7 +865,6 @@ export const app = (window.app = createApp({
       return false;
     };
 
-    // Enhanced loadMorePresets to handle specific item search
     const loadMorePresetsUntilFound = async (targetItem, maxAttempts = 5) => {
       let attempts = 0;
 
@@ -866,7 +878,6 @@ export const app = (window.app = createApp({
       return presets.value[targetItem] !== undefined;
     };
 
-    // Enhanced initializeSelection to handle missing items
     const initializeSelection = async () => {
       if (Object.keys(presets.value).length <= Object.keys(localPresets).length) {
         console.log('[APP] Waiting for presets to load...');
@@ -884,24 +895,24 @@ export const app = (window.app = createApp({
       const selectedParam = getQueryParam('selectedItem');
       if (selectedParam) {
         if (presets.value[selectedParam]) {
-          console.log(`[APP] ✅ Found URL selection in loaded presets: ${selectedParam}`);
+          console.log(`[APP] Found URL selection in loaded presets: ${selectedParam}`);
           selectedItem.value = selectedParam;
           selectedPreset.value = selectedParam;
           hasInitialized.value = true;
           return selectedParam;
         } else {
-          console.log(`[APP] ⚠️ URL selection '${selectedParam}' not found in current presets, attempting to load more...`);
+          console.log(`[APP] URL selection '${selectedParam}' not found in current presets, attempting to load more...`);
 
           const found = await loadMorePresetsUntilFound(selectedParam, 3);
 
           if (found && presets.value[selectedParam]) {
-            console.log(`[APP] ✅ Found URL selection after loading more presets: ${selectedParam}`);
+            console.log(`[APP] Found URL selection after loading more presets: ${selectedParam}`);
             selectedItem.value = selectedParam;
             selectedPreset.value = selectedParam;
             hasInitialized.value = true;
             return selectedParam;
           } else {
-            console.warn(`[APP] ⚠️ URL selection '${selectedParam}' not found after loading attempts`);
+            console.warn(`[APP] URL selection '${selectedParam}' not found after loading attempts`);
             console.log(`[APP] Preserving URL parameter but loading default preset for now`);
             selectedItem.value = selectedParam;
             selectedPreset.value = defaultPreset;
@@ -918,7 +929,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // Watch selectedItem and update URL
     watch(selectedItem, (newItem) => {
       if (newItem && hasInitialized.value) {
         console.log(`[APP] Updating URL with selected item: ${newItem}`);
@@ -926,7 +936,6 @@ export const app = (window.app = createApp({
       }
     });
 
-    // Enhanced fetchPresets with pagination support
     const fetchPresets = async (loadMore = false) => {
       if (isLoading.value) return;
 
@@ -1015,7 +1024,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // Load more presets function
     const loadMorePresets = async () => {
       if (!hasMorePresets.value || isLoading.value) {
         console.log('[API] No more presets to load or already loading');
@@ -1024,7 +1032,6 @@ export const app = (window.app = createApp({
       await fetchPresets(true);
     };
 
-    // Reset presets function
     const resetPresets = async () => {
       currentSkip.value = 0;
       hasMorePresets.value = true;
@@ -1032,19 +1039,16 @@ export const app = (window.app = createApp({
       await fetchPresets(false);
     };
 
-    // Open gallery function with URL sync
     const openGallery = () => {
       console.log('[APP] Opening gallery');
       showGallery.value = true;
     };
 
-    // Close gallery function with URL sync
     const closeGallery = () => {
       console.log('[APP] Closing gallery');
       showGallery.value = false;
     };
 
-    // Enhanced selectPresetFromGallery to handle missing items
     const selectPresetFromGallery = async (presetName) => {
       console.log(`[APP] Gallery selected preset: ${presetName}`);
 
@@ -1062,7 +1066,6 @@ export const app = (window.app = createApp({
       selectPreset(presetName);
     };
 
-    // Only watch preset changes after initialization
     watch(selectedPreset, (preset) => {
       if (!hasInitialized.value) {
         console.log('[APP] Skipping preset change before initialization');
@@ -1086,7 +1089,6 @@ export const app = (window.app = createApp({
       updateUI();
     };
 
-    // UI update with build volume detection support
     const updateUI = async () => {
       if (!preview) return;
 
@@ -1102,7 +1104,6 @@ export const app = (window.app = createApp({
           return;
         }
 
-        // Handle thumbnails
         const { thumbnails } = parser.metadata;
         if (thumbnails && Object.keys(thumbnails).length > 0) {
           const sizes = Object.keys(thumbnails).map(s => parseInt(s.split('x')[0]));
@@ -1115,15 +1116,19 @@ export const app = (window.app = createApp({
 
         layerCount.value = countLayers || 0;
 
-        // Safe color processing
-        const colors = Array.isArray(extrusionColor) ? extrusionColor : [extrusionColor];
-        const validColors = colors.map(c => safeGetHexString(c, '#95dfa1'));
-
-        if (validColors.length === 0 || validColors.every(c => !c || c === '')) {
-          validColors.push('#95dfa1');
+        let validColors;
+        if (multicolorInfo.value.isMulticolor && multicolorInfo.value.colors.length > 0) {
+          validColors = multicolorInfo.value.colors;
+          console.log(`[UI] Using detected multicolor: ${validColors.length} colors`);
+        } else {
+          const colors = Array.isArray(extrusionColor) ? extrusionColor : [extrusionColor];
+          validColors = colors.map(c => safeGetHexString(c, '#95dfa1'));
         }
 
-        // Use detected build volume properly
+        if (!validColors || validColors.length === 0) {
+          validColors = ['#95dfa1'];
+        }
+
         let finalBuildVolume = buildVolume;
         if (detectedBuildVolume.value) {
           finalBuildVolume = detectedBuildVolume.value;
@@ -1133,7 +1138,6 @@ export const app = (window.app = createApp({
         }
 
         const currentSettings = {
-          // emulate3DPlotting: !!emulate3DPlotting,
           startLayer: 1,
           plotMinZ: 0,
           enableStartLayer: false,
@@ -1153,7 +1157,7 @@ export const app = (window.app = createApp({
           lastSegmentColor: safeGetHexString(lastSegmentColor, '#FFFF00'),
           highlightLastSegment: !!lastSegmentColor,
           buildVolume: finalBuildVolume || { x: 100, y: 100, z: 10 },
-          drawBuildVolume: !!finalBuildVolume,
+          drawBuildVolume: !!(finalBuildVolume && finalBuildVolume.x && finalBuildVolume.y),
           backgroundColor: safeGetHexString(backgroundColor, initialBackgroundColor),
           boundingBoxColor: safeGetHexString(boundingBoxColor, '#FF00FF')
         };
@@ -1162,13 +1166,12 @@ export const app = (window.app = createApp({
         preview.endLayer = countLayers || 0;
         applyDevMode(enableDevMode.value);
 
-        console.log(`[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}, build volume: ${JSON.stringify(finalBuildVolume)}`);
+        console.log(`[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}, multicolor: ${multicolorInfo.value.isMulticolor}`);
       } catch (error) {
         console.error('[UI] Error:', error);
       }
     };
 
-    // G-code loading with stream-based build volume detection
     const loadGCodeFromServer = async (filename) => {
       const currentToken = switchToken;
 
@@ -1182,7 +1185,10 @@ export const app = (window.app = createApp({
         const bounds = {};
         let boundingBoxDetected = false;
 
-        // Reset stored G-code versions
+        multicolorData.toolColors.clear();
+        multicolorData.currentTool = 0;
+        multicolorData.detectedTools.clear();
+
         gcodeVersions.original = '';
         gcodeVersions.emulated3D = '';
 
@@ -1199,7 +1205,6 @@ export const app = (window.app = createApp({
               for (const line of lines) {
                 const trimmed = line.trim();
 
-                // Existing build volume detection code
                 const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
                 if (boundMatch) {
                   const [, minMax, axis, value] = boundMatch;
@@ -1225,14 +1230,41 @@ export const app = (window.app = createApp({
                     };
 
                     boundingBoxDetected = true;
-                    console.log(`[BUILD-VOLUME] Detected in stream: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm`, bounds);
+                    console.log(`[BUILD-VOLUME] Detected: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm`);
                   }
                 }
 
-                // Store original line
+                const toolChangeMatch = trimmed.match(/^M06\s+T(\d+)(?:\s*:\s*(\w+))?/i);
+                if (toolChangeMatch) {
+                  const newTool = parseInt(toolChangeMatch[1]);
+                  const inlineColor = toolChangeMatch[2];
+
+                  multicolorData.currentTool = newTool;
+                  multicolorData.detectedTools.add(newTool);
+
+                  if (inlineColor) {
+                    const convertedColor = convertColorName(inlineColor);
+                    if (convertedColor) {
+                      multicolorData.toolColors.set(newTool, convertedColor);
+                    } else {
+                      assignToolColor(newTool);
+                    }
+                  } else {
+                    assignToolColor(newTool);
+                  }
+
+                  originalLines.push(`T${newTool}`);
+                  emulated3DLines.push(`T${newTool}`);
+                  continue;
+                }
+
+                const colorFromComment = parseColorFromComment(trimmed);
+                if (colorFromComment && multicolorData.currentTool > 0) {
+                  multicolorData.toolColors.set(multicolorData.currentTool, colorFromComment);
+                }
+
                 originalLines.push(trimmed);
 
-                // Create emulated 3D version
                 let emulated3DLine = trimmed;
                 if (/^G1/.test(trimmed) && !/E/.test(trimmed)) {
                   emulated3DLine = `${trimmed} E1.0`;
@@ -1240,11 +1272,9 @@ export const app = (window.app = createApp({
                 emulated3DLines.push(emulated3DLine);
               }
 
-              // Accumulate both versions
               gcodeVersions.original += originalLines.join('\n') + '\n';
               gcodeVersions.emulated3D += emulated3DLines.join('\n') + '\n';
 
-              // Output based on current setting
               const outputLines = settings.value.emulate3DPlotting ? emulated3DLines : originalLines;
               controller.enqueue(outputLines.join('\n'));
             }
@@ -1257,9 +1287,30 @@ export const app = (window.app = createApp({
         if (currentToken === switchToken) {
           gcodeVersions.currentMode = settings.value.emulate3DPlotting;
 
+          if (multicolorData.detectedTools.size > 1) {
+            const colorsArray = Array.from(multicolorData.toolColors.values());
+
+            multicolorInfo.value = {
+              toolCount: multicolorData.detectedTools.size,
+              colors: colorsArray,
+              isMulticolor: true
+            };
+
+            console.log(`[MULTICOLOR] Detected ${multicolorData.detectedTools.size} tools with colors:`, colorsArray);
+
+            preview.extrusionColor = colorsArray;
+            settings.value.colors = colorsArray;
+
+          } else {
+            multicolorInfo.value = {
+              toolCount: multicolorData.detectedTools.size,
+              colors: [],
+              isMulticolor: false
+            };
+          }
+
           if (!boundingBoxDetected) {
             detectedBuildVolume.value = null;
-            console.log('[BUILD-VOLUME] No bounding box comments found in G-code stream');
           }
 
           await updateUI();
@@ -1270,7 +1321,6 @@ export const app = (window.app = createApp({
       }
     };
 
-    // Simple preset selection with URL sync
     const selectPreset = async (presetName) => {
       const myToken = ++switchToken;
 
@@ -1281,7 +1331,6 @@ export const app = (window.app = createApp({
         const preset = presets.value[presetName];
         if (!preset) return;
 
-        // Update selected item state for URL sync (only if initialized)
         if (hasInitialized.value) {
           selectedItem.value = presetName;
         }
@@ -1290,6 +1339,12 @@ export const app = (window.app = createApp({
         if (myToken !== switchToken) return;
 
         detectedBuildVolume.value = null;
+
+        multicolorInfo.value = {
+          toolCount: 0,
+          colors: [],
+          isMulticolor: false
+        };
 
         await disposePreview();
         if (myToken !== switchToken) return;
@@ -1327,7 +1382,6 @@ export const app = (window.app = createApp({
         await loadGCodeFromServer(fileUrl);
 
         if (myToken === switchToken) {
-          // **NEW**: Setup enhanced controls after preview is loaded
           setupOrbitControls();
           applyDevMode(enableDevMode.value);
         }
@@ -1344,7 +1398,6 @@ export const app = (window.app = createApp({
 
     watch(enableDevMode, applyDevMode);
 
-    // Watch for emulate3DPlotting changes and switch modes instantly
     watch(() => settings.value.emulate3DPlotting, async (newValue) => {
       if (!preview || gcodeVersions.currentMode === newValue || !gcodeVersions.original) return;
 
@@ -1354,11 +1407,9 @@ export const app = (window.app = createApp({
 
       if (gcodeToUse) {
         try {
-          // **KEY FIX**: Force disposal and recreation of preview
           const currentCanvas = document.querySelector('canvas.preview');
           if (!currentCanvas) return;
 
-          // Dispose current preview completely
           if (preview) {
             try {
               preview.dispose();
@@ -1367,13 +1418,10 @@ export const app = (window.app = createApp({
             }
           }
 
-          // Clear any GUI elements
           document.querySelectorAll('.lil-gui, .stats').forEach(el => el.remove());
 
-          // Small delay to ensure cleanup
           await new Promise(resolve => setTimeout(resolve, 50));
 
-          // Recreate preview with fresh state
           const preset = presets.value[selectedPreset.value];
           const options = {
             ...defaultSettings,
@@ -1381,12 +1429,11 @@ export const app = (window.app = createApp({
             canvas: currentCanvas,
             droppable: true,
             backgroundColor: initialBackgroundColor,
-            emulate3DPlotting: newValue // Set the mode explicitly
+            emulate3DPlotting: newValue
           };
 
           window['_preview'] = preview = new GCodePreview.init(options);
 
-          // Create stream from stored G-code
           const stream = new ReadableStream({
             start(controller) {
               controller.enqueue(gcodeToUse);
@@ -1398,7 +1445,11 @@ export const app = (window.app = createApp({
 
           await preview.processGCode(stream, { render: false });
 
-          // Setup enhanced controls after recreation
+          if (multicolorInfo.value.isMulticolor && multicolorInfo.value.colors.length > 0) {
+            preview.extrusionColor = multicolorInfo.value.colors;
+            settings.value.colors = multicolorInfo.value.colors;
+          }
+
           setupOrbitControls();
           applyDevMode(enableDevMode.value);
 
@@ -1412,53 +1463,40 @@ export const app = (window.app = createApp({
       }
     });
 
-
-
     onMounted(async () => {
       try {
-        console.log('[APP] 🚀 Starting app initialization...');
+        console.log('[APP] Starting app initialization...');
 
-        // **NEW**: Add all event listeners
-        console.log('[EVENT DEBUG] Adding event listeners');
         document.addEventListener('keydown', handleKeydown);
         window.addEventListener('keydown', handleKeydown);
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('wheel', handleWheel, { passive: false });
 
-        // **NEW**: Focus management for keyboard events
         if (document.body) {
           document.body.setAttribute('tabindex', '0');
           document.body.focus();
-          console.log('[EVENT DEBUG] Body focused for keyboard input');
         }
 
-        // **NEW**: Setup canvas-specific mouse listeners after delay
         setTimeout(() => {
           const canvas = document.querySelector('canvas.preview');
           if (canvas) {
             canvas.setAttribute('tabindex', '0');
             canvas.addEventListener('mouseenter', handleMouseEnter);
             canvas.addEventListener('mouseleave', handleMouseLeave);
-            console.log('[EVENT DEBUG] Canvas mouse listeners added');
           }
         }, 2000);
 
-        // Initialize gallery state from URL first
         initializeGalleryFromUrl();
 
-        // 1. Fetch presets first
         await fetchPresets();
-        console.log('[APP] ✅ Presets loaded');
+        console.log('[APP] Presets loaded');
 
-        // 2. Initialize selection (URL takes precedence over default)
         const selectedPresetName = await initializeSelection();
-        console.log(`[APP] ✅ Selection initialized: ${selectedPresetName}`);
+        console.log(`[APP] Selection initialized: ${selectedPresetName}`);
 
-        // 3. Load the selected preset
         await selectPreset(selectedPresetName);
-        console.log(`[APP] ✅ Preset loaded: ${selectedPresetName}`);
+        console.log(`[APP] Preset loaded: ${selectedPresetName}`);
 
-        // Setup watchers with better error handling
         watchEffect(() => {
           if (!preview) return;
           try {
@@ -1529,14 +1567,13 @@ export const app = (window.app = createApp({
           }
         });
 
-        console.log('[APP] ✅ Initialization complete with zoom-to-cursor functionality');
+        console.log('[APP] Initialization complete with zoom-to-cursor and multicolor functionality');
 
       } catch (error) {
         console.error('[MOUNT] Error:', error);
       }
     });
 
-    // **NEW**: Enhanced cleanup
     onUnmounted(() => {
       console.log('[CLEANUP] Removing all event listeners');
       document.removeEventListener('keydown', handleKeydown);
@@ -1552,31 +1589,26 @@ export const app = (window.app = createApp({
     });
 
     return {
-      // Original returns
       presets, activeTab, selectedPreset, thumbnail, layerCount, fileSize,
       model, dragging, settings, loadProgressive, enableDevMode, drawBoundingBox,
       detectedBuildVolume,
       selectTab, addColor, removeColor, update, resetUI: updateUI,
       loadGCodeFromServer, selectPreset,
 
-      // Add pagination-related returns
       loadMorePresets,
       resetPresets,
       isLoading,
       hasMorePresets,
       currentSkip: readonly(currentSkip),
 
-      // Gallery functionality with new methods
       showGallery,
       dynamicPresets,
       selectPresetFromGallery,
       openGallery,
       closeGallery,
 
-      // URL sync functionality
       selectedItem: readonly(selectedItem),
 
-      // **NEW**: Enhanced keyboard navigation and zoom returns
       keyboardNavigation: readonly(keyboardNavigation),
       toggleKeyboardNavigation,
       navigatePresets,
@@ -1584,11 +1616,11 @@ export const app = (window.app = createApp({
       fitToScreen,
       cameraControls,
 
-      // **NEW**: Mouse tracking and zoom functionality
       mousePosition: readonly(mousePosition),
       isMouseOverCanvas: readonly(isMouseOverCanvas),
 
-      // **DEBUG**: Debug functions
+      multicolorInfo: readonly(multicolorInfo),
+
       testKeyboard,
       forceEnableKeyboard,
       debugKeyboardState

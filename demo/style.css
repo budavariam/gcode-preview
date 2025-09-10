@@ -287,6 +287,8 @@ footer {
   margin: 10px;
   transform: translateZ(0);
   animation-delay: 2000ms;
+  overflow: auto;
+  max-height: 70dvh;
 }
 
 .widget>img {
