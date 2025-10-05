@@ -978,7 +978,12 @@ export const app = (window.app = createApp({
             title: item.filename,
             file: item.url,
             getFileUrl: () => getFreshUrl(item.url),
-            model: { name: item.filename },
+            model: {
+              name: item.filename,
+              original: item.url,
+              designer: "budavariam",
+              license: "MIT",
+            },
             ...defaultsForDynamic,
             ...(item.settings || {}),
             buildVolume: { x: 100, y: 100, z: 10 },
