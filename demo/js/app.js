@@ -306,40 +306,25 @@ export const app = (window.app = createApp({
     };
 
     const fitToScreen = () => {
-      console.log('[KEYBOARD] Fitting to screen');
-      if (!preview || !preview.camera || !preview.scene) {
-        console.warn('[KEYBOARD] Preview, camera, or scene not available');
-        return;
-      }
+      if (!preview || !preview.camera || !preview.scene) return;
 
-      try {
-        if (typeof window.THREE === 'undefined') {
-          console.error('[KEYBOARD] THREE.js not available on window object');
-          return;
-        }
+      const box = new window.THREE.Box3();
+      box.setFromObject(preview.scene);
 
-        const box = new window.THREE.Box3();
-        box.setFromObject(preview.scene);
+      const center = box.getCenter(new window.THREE.Vector3());
+      const size = box.getSize(new window.THREE.Vector3());
 
-        const center = box.getCenter(new window.THREE.Vector3());
-        const size = box.getSize(new window.THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const fov = preview.camera.fov * (Math.PI / 180);
+      const distance = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
 
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const fov = preview.camera.fov * (Math.PI / 180);
-        const distance = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
+      // Move camera to look at the model center
+      preview.camera.position.copy(center);
+      preview.camera.position.z += distance;
 
-        preview.camera.position.copy(center);
-        preview.camera.position.z += distance;
-
-        if (preview.controls && preview.controls.target) {
-          preview.controls.target.copy(center);
-          preview.controls.update();
-        }
-
-        simpleRender();
-        console.log('[KEYBOARD] Fit to screen complete');
-      } catch (error) {
-        console.error('[KEYBOARD] Fit to screen error:', error);
+      if (preview.controls && preview.controls.target) {
+        preview.controls.target.copy(center);
+        preview.controls.update();
       }
     };
 
@@ -1388,6 +1373,7 @@ export const app = (window.app = createApp({
 
         if (myToken === switchToken) {
           setupOrbitControls();
+          fitToScreen();
           applyDevMode(enableDevMode.value);
         }
       } catch (error) {
