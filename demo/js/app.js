@@ -1,9 +1,11 @@
 import { createApp, ref, watch, onMounted, onUnmounted, watchEffect, readonly, computed } from 'vue';
 import { presets as localPresets } from './presets.js';
 import * as GCodePreview from 'gcode-preview';
+import * as THREE from 'three';
 import { defaultSettings } from './default-settings.js';
 import { parseIntOrDefault } from './utils.js';
 import { createPreviewGallery } from './previewGallery.js';
+import PathProgressSlider from './slider.js';
 
 const defaultPreset = 'benchy';
 const preferDarkMode = window.matchMedia('(prefers-color-scheme: dark)');
@@ -192,7 +194,8 @@ const setQueryParam = (key, value) => {
 
 export const app = (window.app = createApp({
   components: {
-    PreviewGallery: createPreviewGallery()
+    PreviewGallery: createPreviewGallery(),
+    PathProgressSlider
   },
   setup() {
     const activeTab = ref('layers');
@@ -237,6 +240,10 @@ export const app = (window.app = createApp({
       colors: [],
       isMulticolor: false
     });
+
+    // NEW: Progress slider state - use ref to avoid race condition
+    const showPathProgress = ref(true);
+    const previewRef = ref(null);
 
     const dynamicPresets = computed(() => {
       const result = {};
@@ -308,17 +315,16 @@ export const app = (window.app = createApp({
     const fitToScreen = () => {
       if (!preview || !preview.camera || !preview.scene) return;
 
-      const box = new window.THREE.Box3();
+      const box = new THREE.Box3();
       box.setFromObject(preview.scene);
 
-      const center = box.getCenter(new window.THREE.Vector3());
-      const size = box.getSize(new window.THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
 
       const maxDim = Math.max(size.x, size.y, size.z);
       const fov = preview.camera.fov * (Math.PI / 180);
       const distance = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
 
-      // Move camera to look at the model center
       preview.camera.position.copy(center);
       preview.camera.position.z += distance;
 
@@ -329,7 +335,7 @@ export const app = (window.app = createApp({
     };
 
     const zoomTowardMouse = (deltaZ) => {
-      if (!preview || !preview.camera || typeof window.THREE === 'undefined') {
+      if (!preview || !preview.camera || typeof THREE === 'undefined') {
         preview.camera.position.z += deltaZ;
         if (preview.controls) preview.controls.update();
         simpleRender();
@@ -347,11 +353,11 @@ export const app = (window.app = createApp({
 
         const rect = canvas.getBoundingClientRect();
 
-        const mouse = new window.THREE.Vector2();
+        const mouse = new THREE.Vector2();
         mouse.x = ((mousePosition.value.x - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((mousePosition.value.y - rect.top) / rect.height) * 2 + 1;
 
-        const raycaster = new window.THREE.Raycaster();
+        const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, preview.camera);
 
         const intersects = raycaster.intersectObjects(preview.scene.children, true);
@@ -369,7 +375,7 @@ export const app = (window.app = createApp({
             .add(rayDirection.multiplyScalar(currentDistance));
         }
 
-        const cameraToTarget = new window.THREE.Vector3();
+        const cameraToTarget = new THREE.Vector3();
         cameraToTarget.subVectors(targetPoint, preview.camera.position);
         const currentDistance = cameraToTarget.length();
 
@@ -1079,6 +1085,60 @@ export const app = (window.app = createApp({
       updateUI();
     };
 
+    const handleProgressChange = (x) => {
+      console.log("HPC", x);
+
+      // Ensure preview and scene exist
+      if (!preview || !preview.scene) {
+        console.warn('[PROGRESS] Preview or scene not available');
+        return;
+      }
+
+      // Create red ball if it doesn't exist
+      if (!preview.redBall) {
+        const radius = 0.5
+        const geometry = new THREE.SphereGeometry(radius, 32, 32);
+        const material = new THREE.MeshStandardMaterial({
+          color: 0xFF0000,
+          emissive: 0xFF3333,
+          metalness: 0.3,
+          roughness: 0.4
+        });
+        const sphere = new THREE.Mesh(geometry, material);
+        sphere.position.set(0, 0, 0);
+        preview.scene.add(sphere);
+        preview.redBall = sphere;
+
+        console.log('[PROGRESS] Red ball created and added to scene');
+      }
+
+      // Update ball position based on x.point coordinates
+      if (x?.point) {
+        const { x: px, y: py, z: pz } = x.point;
+
+        // Handle NaN values with fallback to 0
+        const posX = isNaN(px) ? 0 : px;
+        const posY = isNaN(py) ? 0 : py;
+        const posZ = isNaN(pz) ? 0 : pz;
+
+        // Remap coordinates with Y negated to fix direction
+        preview.redBall.position.set(posX, -posZ, -posY);
+
+        console.log(`[PROGRESS] Ball position updated: GCode(${posX}, ${posY}, ${posZ}) -> Three.js(${posX}, ${-posZ}, ${posY})`);
+      } else {
+        console.warn('[PROGRESS] x.point not available', x);
+      }
+
+      // Rotate the ball
+      preview.redBall.rotation.x += 0.05;
+      preview.redBall.rotation.y += 0.05;
+
+      simpleRender();
+    };
+
+
+
+
     const updateUI = async () => {
       if (!preview) return;
 
@@ -1348,6 +1408,8 @@ export const app = (window.app = createApp({
         };
 
         window['_preview'] = preview = new GCodePreview.init(options);
+        // UPDATE: Set the ref AFTER preview is initialized
+        previewRef.value = preview;
 
         if (myToken !== switchToken) {
           await disposePreview();
@@ -1424,6 +1486,8 @@ export const app = (window.app = createApp({
           };
 
           window['_preview'] = preview = new GCodePreview.init(options);
+          // UPDATE: Also update ref here
+          previewRef.value = preview;
 
           const stream = new ReadableStream({
             start(controller) {
@@ -1614,7 +1678,12 @@ export const app = (window.app = createApp({
 
       testKeyboard,
       forceEnableKeyboard,
-      debugKeyboardState
+      debugKeyboardState,
+
+      // NEW: Properly exposed progress slider without race condition
+      showPathProgress,
+      handleProgressChange,
+      preview: previewRef  // Use the ref instead of computed
     };
   }
 }).mount('#app'));
