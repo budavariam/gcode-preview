@@ -666,3 +666,100 @@ footer {
   color: #eee;
   font-size: 12px;
 }
+
+
+
+.path-progress-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+}
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.progress-info {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+}
+
+.slider-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-slider {
+  flex: 1;
+  height: 6px;
+  cursor: pointer;
+  accent-color: #00bfff;
+}
+
+.slider-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.stepper-controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.slider-btn {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.slider-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(0, 191, 255, 0.3);
+}
+
+.slider-btn:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(0.98);
+}
+
+.slider-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.speed-control input {
+  width: 45px;
+  padding: 4px 6px;
+  font-size: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.9);
+}

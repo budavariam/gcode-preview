@@ -1122,7 +1122,7 @@ export const app = (window.app = createApp({
         const posZ = isNaN(pz) ? 0 : pz;
 
         // Remap coordinates with Y negated to fix direction
-        preview.redBall.position.set(posX, -posZ, -posY);
+        preview.redBall.position.set(posX, posZ, -posY);
 
         console.log(`[PROGRESS] Ball position updated: GCode(${posX}, ${posY}, ${posZ}) -> Three.js(${posX}, ${-posZ}, ${posY})`);
       } else {
