@@ -35,7 +35,7 @@ import {
 } from 'three';
 import { makeDroppable } from './extra/dom-utils';
 
-export type BuildVolumeDef = Pick<BuildVolume, 'x' | 'y' | 'z' | 'smallGrid'>;
+export type BuildVolumeDef = Pick<BuildVolume, 'x' | 'y' | 'z' | 'smallGrid' | 'minX' | 'minY'>;
 /**
  * Options for configuring the G-code preview
  */
@@ -229,7 +229,9 @@ export class WebGLPreview {
         opts.buildVolume.y,
         opts.buildVolume.z,
         opts.buildVolume.smallGrid,
-        this.scene
+        this.scene,
+        opts.buildVolume.minX ?? 0,
+        opts.buildVolume.minY ?? 0
       );
       this.disposables.push(this._buildVolume);
     }
@@ -317,7 +319,7 @@ export class WebGLPreview {
       return;
     }
 
-    this._buildVolume = new BuildVolume(value.x, value.y, value.z, value.smallGrid, this.scene);
+    this._buildVolume = new BuildVolume(value.x, value.y, value.z, value.smallGrid, this.scene, value.minX ?? 0, value.minY ?? 0);
 
     if (this._buildVolume) {
       this.disposables.push(this._buildVolume);
@@ -840,7 +842,7 @@ export class WebGLPreview {
 
   private renderBoundingBox(): void {
     if (!this.job || !this.job.boundingBox.isValid) {
-      console.error('Invalid bounding box, skipping rendering');
+      console.debug('renderBoundingBox: no G-code loaded yet, skipping');
       return;
     }
 

@@ -1276,11 +1276,13 @@ export const app = (window.app = createApp({
                     detectedBuildVolume.value = {
                       x: Math.ceil(x * padding),
                       y: Math.ceil(y * padding),
-                      z: Math.ceil(z * padding)
+                      z: Math.ceil(z * padding),
+                      minX: bounds.min_x,
+                      minY: bounds.min_y
                     };
 
                     boundingBoxDetected = true;
-                    console.log(`[BUILD-VOLUME] Detected: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm`);
+                    console.log(`[BUILD-VOLUME] Detected: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm @ (${detectedBuildVolume.value.minX}, ${detectedBuildVolume.value.minY})`);
                   }
                 }
 

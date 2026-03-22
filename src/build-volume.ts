@@ -13,6 +13,10 @@ export class BuildVolume {
   private _y: number;
   /** Height of the build volume in mm */
   private _z: number;
+  /** X offset of the build volume origin in mm (GCode X of the min corner) */
+  private _minX: number = 0;
+  /** Y offset of the build volume origin in mm (GCode Y of the min corner) */
+  private _minY: number = 0;
   /** Color used for the grid */
   private gridColor: Color = new Color(0x888888); // Default grid color
   private smallGridColor: Color = new Color(0x444444); // Default small grid color
@@ -27,17 +31,23 @@ export class BuildVolume {
    * @param z - Height in mm
    * @param smallGrid - Whether to show a small grid
    * @param scene - The Three.js scene to add the build volume to
+   * @param minX - GCode X origin offset in mm (default 0)
+   * @param minY - GCode Y origin offset in mm (default 0)
    */
   constructor(
     x: number,
     y: number,
     z: number,
     private _smallGrid: boolean | undefined,
-    private scene: Scene
+    private scene: Scene,
+    minX = 0,
+    minY = 0
   ) {
     this._x = x;
     this._y = y;
     this._z = z;
+    this._minX = minX;
+    this._minY = minY;
   }
 
   get x(): number {
@@ -78,6 +88,20 @@ export class BuildVolume {
       this._smallGrid = value;
       this.update(); // Update the build volume when smallGrid changes
     }
+  }
+  get minX(): number {
+    return this._minX;
+  }
+  set minX(value: number) {
+    this._minX = value;
+    this.update();
+  }
+  get minY(): number {
+    return this._minY;
+  }
+  set minY(value: number) {
+    this._minY = value;
+    this.update();
   }
 
   /**
@@ -146,6 +170,7 @@ export class BuildVolume {
   createGroup(): Group {
     const group = new Group();
     group.name = 'BuildVolume';
+    group.position.set(this._minX, 0, -this._minY);
     group.add(this.createLineBox());
     if (this.smallGrid) {
       group.add(this.createGrid(1, this.smallGridColor)); // Darker grid for better visibility
