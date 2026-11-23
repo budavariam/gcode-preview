@@ -165,7 +165,6 @@ export default {
       animationFrame = requestAnimationFrame(animate);
     };
 
-
     const pauseAnimation = () => {
       isPlaying.value = false;
       if (animationFrame) {
@@ -198,10 +197,7 @@ export default {
 
     const jumpForward = () => {
       pauseAnimation();
-      currentPosition.value = Math.min(
-        currentPosition.value + 10,
-        totalPositions.value - 1
-      );
+      currentPosition.value = Math.min(currentPosition.value + 10, totalPositions.value - 1);
       handleSliderChange();
     };
 

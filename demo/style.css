@@ -291,7 +291,7 @@ footer {
   max-height: 70dvh;
 }
 
-.widget>img {
+.widget > img {
   border-top-left-radius: 4px;
   border-top-right-radius: 4px;
 }
@@ -486,7 +486,6 @@ footer {
 }
 
 @keyframes pulse {
-
   0%,
   100% {
     opacity: 0.6;
@@ -530,7 +529,6 @@ footer {
   border-color: #95dfa1;
 }
 
-
 .path-progress-slider {
   position: absolute;
   bottom: 10px;
@@ -557,7 +555,7 @@ footer {
 
 .progress-info {
   font-size: 12px;
-  color: #00FFFF;
+  color: #00ffff;
   font-family: 'Courier New', monospace;
 }
 
@@ -571,7 +569,7 @@ footer {
   height: 6px;
   -webkit-appearance: none;
   appearance: none;
-  background: linear-gradient(to right, #00FFFF 0%, #4ECDC4 100%);
+  background: linear-gradient(to right, #00ffff 0%, #4ecdc4 100%);
   outline: none;
   border-radius: 3px;
   cursor: pointer;
@@ -583,7 +581,7 @@ footer {
   width: 18px;
   height: 18px;
   background: #fff;
-  border: 2px solid #00FFFF;
+  border: 2px solid #00ffff;
   border-radius: 50%;
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
@@ -598,7 +596,7 @@ footer {
   width: 18px;
   height: 18px;
   background: #fff;
-  border: 2px solid #00FFFF;
+  border: 2px solid #00ffff;
   border-radius: 50%;
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
@@ -609,13 +607,11 @@ footer {
   transform: scale(1.2);
 }
 
-
 /* SLIDER CONTAINER - Make sure it's visible */
 .slider-container {
   position: relative;
   padding: 12px 0;
 }
-
 
 .slider-footer {
   display: flex;
@@ -627,7 +623,7 @@ footer {
 
 .slider-footer button {
   padding: 6px 14px;
-  background: #00FFFF;
+  background: #00ffff;
   color: #1a1a1a;
   border: none;
   border-radius: 4px;
@@ -666,8 +662,6 @@ footer {
   color: #eee;
   font-size: 12px;
 }
-
-
 
 .path-progress-slider {
   display: flex;

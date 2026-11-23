@@ -28,56 +28,49 @@ let multicolorData = {
   currentTool: 0,
   detectedTools: new Set(),
   defaultColors: [
-    '#95dfa1', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE',
-    '#FF9F40', '#FF6384', '#36A2EB', '#4BC0C0', '#9966FF', '#FF9F40', '#C9CBCF', '#4BC0C0'
+    '#95dfa1',
+    '#FF6B6B',
+    '#4ECDC4',
+    '#45B7D1',
+    '#FFA07A',
+    '#98D8C8',
+    '#F7DC6F',
+    '#BB8FCE',
+    '#FF9F40',
+    '#FF6384',
+    '#36A2EB',
+    '#4BC0C0',
+    '#9966FF',
+    '#FF9F40',
+    '#C9CBCF',
+    '#4BC0C0'
   ]
-};
-
-const parseBuildVolumeFromGCode = (gcodeText) => {
-  const lines = gcodeText.split('\n');
-  const bounds = {};
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const boundMatch = trimmed.match(/;\s*(min_|max_)([xyz])\s*=\s*([-\d.]+)/i);
-    if (boundMatch) {
-      const [, minMax, axis, value] = boundMatch;
-      const key = `${minMax.toLowerCase()}${axis.toLowerCase()}`;
-      bounds[key] = parseFloat(value);
-    }
-  }
-
-  if (bounds.min_x !== undefined && bounds.max_x !== undefined &&
-    bounds.min_y !== undefined && bounds.max_y !== undefined) {
-
-    const x = Math.abs(bounds.max_x - bounds.min_x);
-    const y = Math.abs(bounds.max_y - bounds.min_y);
-    let z = 15;
-    if (bounds.min_z !== undefined && bounds.max_z !== undefined) {
-      z = Math.abs(bounds.max_z - bounds.min_z);
-    }
-
-    const padding = 1.05;
-    return {
-      x: Math.ceil(x * padding),
-      y: Math.ceil(y * padding),
-      z: Math.ceil(z * padding),
-      detected: true,
-      bounds: bounds
-    };
-  }
-  return null;
 };
 
 const convertColorName = (colorName) => {
   if (!colorName || typeof colorName !== 'string') return null;
 
   const colorMap = {
-    'red': '#FF0000', 'blue': '#0000FF', 'green': '#00FF00', 'yellow': '#FFFF00',
-    'magenta': '#FF00FF', 'cyan': '#00FFFF', 'black': '#000000', 'white': '#FFFFFF',
-    'orange': '#FFA500', 'purple': '#800080', 'pink': '#FFC0CB', 'brown': '#A52A2A',
-    'gray': '#808080', 'grey': '#808080', 'lime': '#00FF00', 'navy': '#000080',
-    'teal': '#008080', 'silver': '#C0C0C0', 'maroon': '#800000', 'olive': '#808000'
+    red: '#FF0000',
+    blue: '#0000FF',
+    green: '#00FF00',
+    yellow: '#FFFF00',
+    magenta: '#FF00FF',
+    cyan: '#00FFFF',
+    black: '#000000',
+    white: '#FFFFFF',
+    orange: '#FFA500',
+    purple: '#800080',
+    pink: '#FFC0CB',
+    brown: '#A52A2A',
+    gray: '#808080',
+    grey: '#808080',
+    lime: '#00FF00',
+    navy: '#000080',
+    teal: '#008080',
+    silver: '#C0C0C0',
+    maroon: '#800000',
+    olive: '#808000'
   };
 
   return colorMap[colorName.toLowerCase()] || null;
@@ -168,8 +161,8 @@ const disposePreview = async () => {
     }
     preview = null;
   }
-  document.querySelectorAll('.lil-gui, .stats').forEach(el => el.remove());
-  await new Promise(resolve => setTimeout(resolve, 50));
+  document.querySelectorAll('.lil-gui, .stats').forEach((el) => el.remove());
+  await new Promise((resolve) => setTimeout(resolve, 50));
 };
 
 const getFreshUrl = (url) => {
@@ -263,7 +256,9 @@ export const app = (window.app = createApp({
       const presetKeys = Object.keys(presets.value);
       const currentIndex = presetKeys.indexOf(selectedPreset.value);
 
-      console.log(`[KEYBOARD] Current preset: ${selectedPreset.value}, index: ${currentIndex}, total: ${presetKeys.length}`);
+      console.log(
+        `[KEYBOARD] Current preset: ${selectedPreset.value}, index: ${currentIndex}, total: ${presetKeys.length}`
+      );
 
       if (currentIndex === -1) {
         console.warn('[KEYBOARD] Current preset not found in list');
@@ -367,12 +362,12 @@ export const app = (window.app = createApp({
           targetPoint = intersects[0].point.clone();
         } else {
           const rayDirection = raycaster.ray.direction.clone();
-          const currentDistance = preview.controls && preview.controls.target
-            ? preview.camera.position.distanceTo(preview.controls.target)
-            : 100;
+          const currentDistance =
+            preview.controls && preview.controls.target
+              ? preview.camera.position.distanceTo(preview.controls.target)
+              : 100;
 
-          targetPoint = preview.camera.position.clone()
-            .add(rayDirection.multiplyScalar(currentDistance));
+          targetPoint = preview.camera.position.clone().add(rayDirection.multiplyScalar(currentDistance));
         }
 
         const cameraToTarget = new THREE.Vector3();
@@ -415,9 +410,10 @@ export const app = (window.app = createApp({
 
           simpleRender();
 
-          console.log(`[ZOOM] ${deltaZ < 0 ? 'In' : 'Out'} - Distance: ${currentDistance.toFixed(2)} -> ${preview.camera.position.distanceTo(targetPoint).toFixed(2)}`);
+          console.log(
+            `[ZOOM] ${deltaZ < 0 ? 'In' : 'Out'} - Distance: ${currentDistance.toFixed(2)} -> ${preview.camera.position.distanceTo(targetPoint).toFixed(2)}`
+          );
         }
-
       } catch (error) {
         console.error('[ZOOM] Mouse zoom error:', error);
         preview.camera.position.z += deltaZ;
@@ -442,7 +438,9 @@ export const app = (window.app = createApp({
           preview.camera.position.y += deltaY;
           preview.camera.position.z += deltaZ;
 
-          console.log(`[KEYBOARD] Camera moved from [${oldPos.x}, ${oldPos.y}, ${oldPos.z}] to [${preview.camera.position.x}, ${preview.camera.position.y}, ${preview.camera.position.z}]`);
+          console.log(
+            `[KEYBOARD] Camera moved from [${oldPos.x}, ${oldPos.y}, ${oldPos.z}] to [${preview.camera.position.x}, ${preview.camera.position.y}, ${preview.camera.position.z}]`
+          );
 
           if (preview.controls) {
             preview.controls.update();
@@ -547,18 +545,18 @@ export const app = (window.app = createApp({
         }
 
         console.log('[CONTROLS] Enhanced OrbitControls configured for optimal zoom behavior');
-
       } catch (error) {
         console.error('[CONTROLS] Error setting up enhanced orbit controls:', error);
       }
     };
 
     const keyboardShortcuts = {
-      'g': () => {
+      g: () => {
         console.log('[KEYBOARD] Gallery toggle pressed');
-        showGallery.value ? closeGallery() : openGallery();
+        if (showGallery.value) closeGallery();
+        else openGallery();
       },
-      'Escape': () => {
+      Escape: () => {
         console.log('[KEYBOARD] Escape pressed');
         if (keyboardNavigation.value.showHelpOverlay) {
           keyboardNavigation.value.showHelpOverlay = false;
@@ -567,20 +565,20 @@ export const app = (window.app = createApp({
         }
       },
 
-      '1': () => {
+      1: () => {
         console.log('[KEYBOARD] Tab 1 pressed - layers');
         selectTab('layers');
       },
-      '2': () => {
+      2: () => {
         console.log('[KEYBOARD] Tab 2 pressed - travel');
         selectTab('travel');
       },
-      '3': () => {
+      3: () => {
         console.log('[KEYBOARD] Tab 3 pressed - extrusion');
         selectTab('extrusion');
       },
 
-      'ArrowUp': (e) => {
+      ArrowUp: (e) => {
         e.preventDefault();
         console.log(`[KEYBOARD] Arrow Up pressed ${e.shiftKey ? 'with Shift' : ''}`);
         if (e.shiftKey) {
@@ -589,7 +587,7 @@ export const app = (window.app = createApp({
           changeLayer('up', 'end');
         }
       },
-      'ArrowDown': (e) => {
+      ArrowDown: (e) => {
         e.preventDefault();
         console.log(`[KEYBOARD] Arrow Down pressed ${e.shiftKey ? 'with Shift' : ''}`);
         if (e.shiftKey) {
@@ -598,7 +596,7 @@ export const app = (window.app = createApp({
           changeLayer('down', 'end');
         }
       },
-      'ArrowLeft': (e) => {
+      ArrowLeft: (e) => {
         e.preventDefault();
         console.log(`[KEYBOARD] Arrow Left pressed ${e.ctrlKey || e.metaKey ? 'with Ctrl/Cmd' : ''}`);
         if (e.ctrlKey || e.metaKey) {
@@ -607,7 +605,7 @@ export const app = (window.app = createApp({
           navigatePresets('previous');
         }
       },
-      'ArrowRight': (e) => {
+      ArrowRight: (e) => {
         e.preventDefault();
         console.log(`[KEYBOARD] Arrow Right pressed ${e.ctrlKey || e.metaKey ? 'with Ctrl/Cmd' : ''}`);
         if (e.ctrlKey || e.metaKey) {
@@ -617,68 +615,68 @@ export const app = (window.app = createApp({
         }
       },
 
-      'p': () => {
+      p: () => {
         console.log('[KEYBOARD] P pressed - previous preset');
         navigatePresets('previous');
       },
-      'n': () => {
+      n: () => {
         console.log('[KEYBOARD] N pressed - next preset');
         navigatePresets('next');
       },
 
-      'r': () => {
+      r: () => {
         console.log('[KEYBOARD] R pressed - reset camera');
         resetCameraView();
       },
-      'f': () => {
+      f: () => {
         console.log('[KEYBOARD] F pressed - fit to screen');
         fitToScreen();
       },
 
-      'w': (e) => {
+      w: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] W pressed - move up');
         moveCameraBy(0, cameraControls.value.moveSpeed, 0);
       },
-      'a': (e) => {
+      a: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] A pressed - move left');
         moveCameraBy(-cameraControls.value.moveSpeed, 0, 0);
       },
-      's': (e) => {
+      s: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] S pressed - move down');
         moveCameraBy(0, -cameraControls.value.moveSpeed, 0);
       },
-      'd': (e) => {
+      d: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] D pressed - move right');
         moveCameraBy(cameraControls.value.moveSpeed, 0, 0);
       },
-      'q': (e) => {
+      q: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] Q pressed - zoom in (mouse-aware)');
         moveCameraBy(0, 0, -cameraControls.value.zoomSpeed, true);
       },
-      'e': (e) => {
+      e: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] E pressed - zoom out (mouse-aware)');
         moveCameraBy(0, 0, cameraControls.value.zoomSpeed, true);
       },
 
-      't': () => {
+      t: () => {
         console.log('[KEYBOARD] T pressed - toggle travel');
         toggleSetting('renderTravel', 'travel rendering');
       },
-      'x': () => {
+      x: () => {
         console.log('[KEYBOARD] X pressed - toggle extrusion');
         toggleSetting('renderExtrusion', 'extrusion rendering');
       },
-      'b': () => {
+      b: () => {
         console.log('[KEYBOARD] B pressed - toggle build volume');
         toggleSetting('drawBuildVolume', 'build volume display');
       },
-      'l': () => {
+      l: () => {
         console.log('[KEYBOARD] L pressed - toggle single layer mode');
         toggleSetting('singleLayerMode', 'single layer mode');
       },
@@ -692,12 +690,12 @@ export const app = (window.app = createApp({
         toggleSetting('enableEndLayer', 'end layer control');
       },
 
-      'F12': (e) => {
+      F12: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] F12 pressed - toggle dev mode');
         enableDevMode.value = !enableDevMode.value;
       },
-      'h': () => {
+      h: () => {
         console.log('[KEYBOARD] H pressed - toggle help');
         keyboardNavigation.value.showHelpOverlay = !keyboardNavigation.value.showHelpOverlay;
       },
@@ -706,14 +704,14 @@ export const app = (window.app = createApp({
         keyboardNavigation.value.showHelpOverlay = !keyboardNavigation.value.showHelpOverlay;
       },
 
-      'PageUp': (e) => {
+      PageUp: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] PageUp pressed - skip 5 presets back');
         for (let i = 0; i < 5; i++) {
           navigatePresets('previous');
         }
       },
-      'PageDown': (e) => {
+      PageDown: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] PageDown pressed - skip 5 presets forward');
         for (let i = 0; i < 5; i++) {
@@ -721,7 +719,7 @@ export const app = (window.app = createApp({
         }
       },
 
-      'End': (e) => {
+      End: (e) => {
         e.preventDefault();
         console.log('[KEYBOARD] End pressed - jump to last layer');
         if (settings.value.enableEndLayer) {
@@ -731,7 +729,7 @@ export const app = (window.app = createApp({
           simpleRender();
         }
       },
-      'Home': (e) => {
+      Home: (e) => {
         e.preventDefault();
         console.log(`[KEYBOARD] Home pressed ${e.shiftKey ? 'with Shift' : ''}`);
         if (e.shiftKey && settings.value.enableStartLayer) {
@@ -746,7 +744,9 @@ export const app = (window.app = createApp({
     };
 
     const handleKeydown = (e) => {
-      console.log(`[KEYBOARD DEBUG] Key pressed: "${e.key}", enabled: ${keyboardNavigation.value.enabled}, target: ${e.target.tagName}`);
+      console.log(
+        `[KEYBOARD DEBUG] Key pressed: "${e.key}", enabled: ${keyboardNavigation.value.enabled}, target: ${e.target.tagName}`
+      );
 
       if (!keyboardNavigation.value.enabled) {
         console.log('[KEYBOARD DEBUG] Navigation disabled, ignoring key');
@@ -808,10 +808,14 @@ export const app = (window.app = createApp({
           startLayer: settings.value.startLayer,
           endLayer: settings.value.endLayer
         },
-        camera: preview ? {
-          position: preview.camera ? [preview.camera.position.x, preview.camera.position.y, preview.camera.position.z] : 'no camera',
-          hasControls: !!preview.controls
-        } : 'no preview'
+        camera: preview
+          ? {
+              position: preview.camera
+                ? [preview.camera.position.x, preview.camera.position.y, preview.camera.position.z]
+                : 'no camera',
+              hasControls: !!preview.controls
+            }
+          : 'no preview'
       });
     };
 
@@ -842,20 +846,6 @@ export const app = (window.app = createApp({
       }
     });
 
-    const loadSelectedItemFromUrl = () => {
-      const selectedParam = getQueryParam('selectedItem');
-      if (selectedParam && presets.value[selectedParam]) {
-        console.log(`[APP] Loading selected item from URL: ${selectedParam}`);
-        selectedItem.value = selectedParam;
-        selectedPreset.value = selectedParam;
-        return true;
-      } else if (selectedParam) {
-        console.warn(`[APP] Selected item ${selectedParam} not found in presets, will try to load more`);
-        return selectedParam;
-      }
-      return false;
-    };
-
     const loadMorePresetsUntilFound = async (targetItem, maxAttempts = 5) => {
       let attempts = 0;
 
@@ -863,7 +853,7 @@ export const app = (window.app = createApp({
         attempts++;
         console.log(`[APP] Loading more presets (attempt ${attempts}) to find: ${targetItem}`);
         await loadMorePresets();
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
 
       return presets.value[targetItem] !== undefined;
@@ -892,7 +882,9 @@ export const app = (window.app = createApp({
           hasInitialized.value = true;
           return selectedParam;
         } else {
-          console.log(`[APP] URL selection '${selectedParam}' not found in current presets, attempting to load more...`);
+          console.log(
+            `[APP] URL selection '${selectedParam}' not found in current presets, attempting to load more...`
+          );
 
           const found = await loadMorePresetsUntilFound(selectedParam, 3);
 
@@ -938,10 +930,9 @@ export const app = (window.app = createApp({
 
         console.log(`[API] Fetching presets: skip=${skip}, limit=${limit}`);
 
-        const response = await fetch(
-          `http://localhost:2727/preview/gcodes?skip=${skip}&limit=${limit}`,
-          { cache: 'no-store' }
-        );
+        const response = await fetch(`http://localhost:2727/preview/gcodes?skip=${skip}&limit=${limit}`, {
+          cache: 'no-store'
+        });
 
         if (!response.ok) {
           console.error(`[API] Request failed: ${response.status} ${response.statusText}`);
@@ -964,7 +955,7 @@ export const app = (window.app = createApp({
         };
 
         const newPresets = {};
-        apiPresets.forEach(item => {
+        apiPresets.forEach((item) => {
           newPresets[item.filename] = {
             title: item.filename,
             file: item.url,
@@ -972,13 +963,13 @@ export const app = (window.app = createApp({
             model: {
               name: item.filename,
               original: item.url,
-              designer: "budavariam",
-              license: "MIT",
+              designer: 'budavariam',
+              license: 'MIT'
             },
             ...defaultsForDynamic,
             ...(item.settings || {}),
             buildVolume: { x: 100, y: 100, z: 10 },
-            initialCameraPosition: [50, 50, 150],
+            initialCameraPosition: [50, 50, 150]
           };
         });
 
@@ -1011,7 +1002,6 @@ export const app = (window.app = createApp({
           currentSkip.value = limit;
           console.log(`[API] Initial load: ${addedCount} new presets`);
         }
-
       } catch (error) {
         console.error('[API] Error fetching presets:', error);
         hasMorePresets.value = false;
@@ -1086,7 +1076,7 @@ export const app = (window.app = createApp({
     };
 
     const handleProgressChange = (x) => {
-      console.log("HPC", x);
+      console.log('HPC', x);
 
       // Ensure preview and scene exist
       if (!preview || !preview.scene) {
@@ -1096,11 +1086,11 @@ export const app = (window.app = createApp({
 
       // Create red ball if it doesn't exist
       if (!preview.redBall) {
-        const radius = 0.5
+        const radius = 0.5;
         const geometry = new THREE.SphereGeometry(radius, 32, 32);
         const material = new THREE.MeshStandardMaterial({
-          color: 0xFF0000,
-          emissive: 0xFF3333,
+          color: 0xff0000,
+          emissive: 0xff3333,
           metalness: 0.3,
           roughness: 0.4
         });
@@ -1124,7 +1114,9 @@ export const app = (window.app = createApp({
         // Remap coordinates with Y negated to fix direction
         preview.redBall.position.set(posX, posZ, -posY);
 
-        console.log(`[PROGRESS] Ball position updated: GCode(${posX}, ${posY}, ${posZ}) -> Three.js(${posX}, ${-posZ}, ${posY})`);
+        console.log(
+          `[PROGRESS] Ball position updated: GCode(${posX}, ${posY}, ${posZ}) -> Three.js(${posX}, ${-posZ}, ${posY})`
+        );
       } else {
         console.warn('[PROGRESS] x.point not available', x);
       }
@@ -1136,17 +1128,26 @@ export const app = (window.app = createApp({
       simpleRender();
     };
 
-
-
-
     const updateUI = async () => {
       if (!preview) return;
 
       try {
         const {
-          parser, countLayers, extrusionColor, topLayerColor, lastSegmentColor,
-          buildVolume, backgroundColor, singleLayerMode, renderTravel, emulate3DPlotting, travelColor,
-          renderExtrusion, lineWidth, renderTubes, extrusionWidth, boundingBoxColor
+          parser,
+          countLayers,
+          extrusionColor,
+          topLayerColor,
+          lastSegmentColor,
+          buildVolume,
+          backgroundColor,
+          singleLayerMode,
+          renderTravel,
+          travelColor,
+          renderExtrusion,
+          lineWidth,
+          renderTubes,
+          extrusionWidth,
+          boundingBoxColor
         } = preview;
 
         if (!parser?.metadata) {
@@ -1156,9 +1157,9 @@ export const app = (window.app = createApp({
 
         const { thumbnails } = parser.metadata;
         if (thumbnails && Object.keys(thumbnails).length > 0) {
-          const sizes = Object.keys(thumbnails).map(s => parseInt(s.split('x')[0]));
+          const sizes = Object.keys(thumbnails).map((s) => parseInt(s.split('x')[0]));
           const largest = Math.max(...sizes);
-          const key = Object.keys(thumbnails).find(k => k.startsWith(`${largest}x`));
+          const key = Object.keys(thumbnails).find((k) => k.startsWith(`${largest}x`));
           thumbnail.value = thumbnails[key]?.src;
         } else {
           thumbnail.value = null;
@@ -1172,7 +1173,7 @@ export const app = (window.app = createApp({
           console.log(`[UI] Using detected multicolor: ${validColors.length} colors`);
         } else {
           const colors = Array.isArray(extrusionColor) ? extrusionColor : [extrusionColor];
-          validColors = colors.map(c => safeGetHexString(c, '#95dfa1'));
+          validColors = colors.map((c) => safeGetHexString(c, '#95dfa1'));
         }
 
         if (!validColors || validColors.length === 0) {
@@ -1216,7 +1217,9 @@ export const app = (window.app = createApp({
         preview.endLayer = countLayers || 0;
         applyDevMode(enableDevMode.value);
 
-        console.log(`[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}, multicolor: ${multicolorInfo.value.isMulticolor}`);
+        console.log(
+          `[UI] Updated - layers: ${countLayers || 0}, colors: ${validColors.length}, multicolor: ${multicolorInfo.value.isMulticolor}`
+        );
       } catch (error) {
         console.error('[UI] Error:', error);
       }
@@ -1242,11 +1245,10 @@ export const app = (window.app = createApp({
         gcodeVersions.original = '';
         gcodeVersions.emulated3D = '';
 
-        const gcodeStream = response.body
-          .pipeThrough(new TextDecoderStream())
-          .pipeThrough(new TransformStream({
+        const gcodeStream = response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
+          new TransformStream({
             transform(chunk, controller) {
-              let processedChunk = chunk.replace(/^N\d+\s+/gm, "");
+              let processedChunk = chunk.replace(/^N\d+\s+/gm, '');
 
               const lines = processedChunk.split('\n');
               const originalLines = [];
@@ -1261,10 +1263,13 @@ export const app = (window.app = createApp({
                   const key = `${minMax.toLowerCase()}${axis.toLowerCase()}`;
                   bounds[key] = parseFloat(value);
 
-                  if (!boundingBoxDetected &&
-                    bounds.min_x !== undefined && bounds.max_x !== undefined &&
-                    bounds.min_y !== undefined && bounds.max_y !== undefined) {
-
+                  if (
+                    !boundingBoxDetected &&
+                    bounds.min_x !== undefined &&
+                    bounds.max_x !== undefined &&
+                    bounds.min_y !== undefined &&
+                    bounds.max_y !== undefined
+                  ) {
                     const x = Math.abs(bounds.max_x - bounds.min_x);
                     const y = Math.abs(bounds.max_y - bounds.min_y);
                     let z = 15;
@@ -1282,7 +1287,9 @@ export const app = (window.app = createApp({
                     };
 
                     boundingBoxDetected = true;
-                    console.log(`[BUILD-VOLUME] Detected: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm @ (${detectedBuildVolume.value.minX}, ${detectedBuildVolume.value.minY})`);
+                    console.log(
+                      `[BUILD-VOLUME] Detected: ${detectedBuildVolume.value.x}x${detectedBuildVolume.value.y}x${detectedBuildVolume.value.z}mm @ (${detectedBuildVolume.value.minX}, ${detectedBuildVolume.value.minY})`
+                    );
                   }
                 }
 
@@ -1330,7 +1337,8 @@ export const app = (window.app = createApp({
               const outputLines = settings.value.emulate3DPlotting ? emulated3DLines : originalLines;
               controller.enqueue(outputLines.join('\n'));
             }
-          }));
+          })
+        );
 
         if (currentToken !== switchToken || !preview) return;
 
@@ -1352,7 +1360,6 @@ export const app = (window.app = createApp({
 
             preview.extrusionColor = colorsArray;
             settings.value.colors = colorsArray;
-
           } else {
             multicolorInfo.value = {
               toolCount: multicolorData.detectedTools.size,
@@ -1446,79 +1453,80 @@ export const app = (window.app = createApp({
     };
 
     function applyDevMode(enabled) {
-      document.querySelectorAll('.lil-gui, .stats').forEach(el =>
-        el.style.display = enabled ? 'block' : 'none'
-      );
+      document.querySelectorAll('.lil-gui, .stats').forEach((el) => (el.style.display = enabled ? 'block' : 'none'));
     }
 
     watch(enableDevMode, applyDevMode);
 
-    watch(() => settings.value.emulate3DPlotting, async (newValue) => {
-      if (!preview || gcodeVersions.currentMode === newValue || !gcodeVersions.original) return;
+    watch(
+      () => settings.value.emulate3DPlotting,
+      async (newValue) => {
+        if (!preview || gcodeVersions.currentMode === newValue || !gcodeVersions.original) return;
 
-      console.log(`[EMULATION] Switching to ${newValue ? '3D emulated' : 'original'} mode`);
+        console.log(`[EMULATION] Switching to ${newValue ? '3D emulated' : 'original'} mode`);
 
-      const gcodeToUse = newValue ? gcodeVersions.emulated3D : gcodeVersions.original;
+        const gcodeToUse = newValue ? gcodeVersions.emulated3D : gcodeVersions.original;
 
-      if (gcodeToUse) {
-        try {
-          const currentCanvas = document.querySelector('canvas.preview');
-          if (!currentCanvas) return;
+        if (gcodeToUse) {
+          try {
+            const currentCanvas = document.querySelector('canvas.preview');
+            if (!currentCanvas) return;
 
-          if (preview) {
-            try {
-              preview.dispose();
-            } catch (error) {
-              console.error('[EMULATION] Disposal error:', error);
+            if (preview) {
+              try {
+                preview.dispose();
+              } catch (error) {
+                console.error('[EMULATION] Disposal error:', error);
+              }
             }
-          }
 
-          document.querySelectorAll('.lil-gui, .stats').forEach(el => el.remove());
+            document.querySelectorAll('.lil-gui, .stats').forEach((el) => el.remove());
 
-          await new Promise(resolve => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 50));
 
-          const preset = presets.value[selectedPreset.value];
-          const options = {
-            ...defaultSettings,
-            ...preset,
-            canvas: currentCanvas,
-            droppable: true,
-            backgroundColor: initialBackgroundColor,
-            emulate3DPlotting: newValue
-          };
+            const preset = presets.value[selectedPreset.value];
+            const options = {
+              ...defaultSettings,
+              ...preset,
+              canvas: currentCanvas,
+              droppable: true,
+              backgroundColor: initialBackgroundColor,
+              emulate3DPlotting: newValue
+            };
 
-          window['_preview'] = preview = new GCodePreview.init(options);
-          // UPDATE: Also update ref here
-          previewRef.value = preview;
+            window['_preview'] = preview = new GCodePreview.init(options);
+            // UPDATE: Also update ref here
+            previewRef.value = preview;
 
-          const stream = new ReadableStream({
-            start(controller) {
-              controller.enqueue(gcodeToUse);
-              controller.close();
+            const stream = new ReadableStream({
+              start(controller) {
+                controller.enqueue(gcodeToUse);
+                controller.close();
+              }
+            });
+
+            gcodeVersions.currentMode = newValue;
+
+            await preview.processGCode(stream, { render: false });
+
+            if (multicolorInfo.value.isMulticolor && multicolorInfo.value.colors.length > 0) {
+              preview.extrusionColor = multicolorInfo.value.colors;
+              settings.value.colors = multicolorInfo.value.colors;
             }
-          });
 
-          gcodeVersions.currentMode = newValue;
+            setupOrbitControls();
+            applyDevMode(enableDevMode.value);
 
-          await preview.processGCode(stream, { render: false });
+            await updateUI();
+            simpleRender();
 
-          if (multicolorInfo.value.isMulticolor && multicolorInfo.value.colors.length > 0) {
-            preview.extrusionColor = multicolorInfo.value.colors;
-            settings.value.colors = multicolorInfo.value.colors;
+            console.log(`[EMULATION] Successfully switched to ${newValue ? '3D emulated' : 'original'} mode`);
+          } catch (error) {
+            console.error('[EMULATION] Error switching modes:', error);
           }
-
-          setupOrbitControls();
-          applyDevMode(enableDevMode.value);
-
-          await updateUI();
-          simpleRender();
-
-          console.log(`[EMULATION] Successfully switched to ${newValue ? '3D emulated' : 'original'} mode`);
-        } catch (error) {
-          console.error('[EMULATION] Error switching modes:', error);
         }
       }
-    });
+    );
 
     onMounted(async () => {
       try {
@@ -1566,8 +1574,9 @@ export const app = (window.app = createApp({
                 z: +settings.value.buildVolume.z
               });
             }
-            preview.boundingBoxColor = drawBoundingBox.value ?
-              (settings.value.boundingBoxColor ?? 'magenta') : undefined;
+            preview.boundingBoxColor = drawBoundingBox.value
+              ? (settings.value.boundingBoxColor ?? 'magenta')
+              : undefined;
           } catch (error) {
             console.error('[WATCH-EFFECT] Background/volume error:', error);
           }
@@ -1617,15 +1626,14 @@ export const app = (window.app = createApp({
         watchEffect(() => {
           if (!preview) return;
           try {
-            preview.extrusionColor = settings.value.colors.length === 1 ?
-              settings.value.colors[0] : settings.value.colors;
+            preview.extrusionColor =
+              settings.value.colors.length === 1 ? settings.value.colors[0] : settings.value.colors;
           } catch (error) {
             console.error('[WATCH-EFFECT] Extrusion color error:', error);
           }
         });
 
         console.log('[APP] Initialization complete with zoom-to-cursor and multicolor functionality');
-
       } catch (error) {
         console.error('[MOUNT] Error:', error);
       }
@@ -1646,11 +1654,26 @@ export const app = (window.app = createApp({
     });
 
     return {
-      presets, activeTab, selectedPreset, thumbnail, layerCount, fileSize,
-      model, dragging, settings, loadProgressive, enableDevMode, drawBoundingBox,
+      presets,
+      activeTab,
+      selectedPreset,
+      thumbnail,
+      layerCount,
+      fileSize,
+      model,
+      dragging,
+      settings,
+      loadProgressive,
+      enableDevMode,
+      drawBoundingBox,
       detectedBuildVolume,
-      selectTab, addColor, removeColor, update, resetUI: updateUI,
-      loadGCodeFromServer, selectPreset,
+      selectTab,
+      addColor,
+      removeColor,
+      update,
+      resetUI: updateUI,
+      loadGCodeFromServer,
+      selectPreset,
 
       loadMorePresets,
       resetPresets,
@@ -1685,7 +1708,7 @@ export const app = (window.app = createApp({
       // NEW: Properly exposed progress slider without race condition
       showPathProgress,
       handleProgressChange,
-      preview: previewRef  // Use the ref instead of computed
+      preview: previewRef // Use the ref instead of computed
     };
   }
 }).mount('#app'));

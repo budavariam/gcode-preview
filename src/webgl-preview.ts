@@ -319,7 +319,15 @@ export class WebGLPreview {
       return;
     }
 
-    this._buildVolume = new BuildVolume(value.x, value.y, value.z, value.smallGrid, this.scene, value.minX ?? 0, value.minY ?? 0);
+    this._buildVolume = new BuildVolume(
+      value.x,
+      value.y,
+      value.z,
+      value.smallGrid,
+      this.scene,
+      value.minX ?? 0,
+      value.minY ?? 0
+    );
 
     if (this._buildVolume) {
       this.disposables.push(this._buildVolume);
